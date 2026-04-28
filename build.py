@@ -1592,7 +1592,7 @@ def _collect_headlines() -> list[Headline]:
     """
 
     # Number of top items to show per source.
-    per_source_target = 5
+    per_source_target = 6
 
     feeds: list[FeedSpec] = _feed_specs()
 
@@ -1811,7 +1811,7 @@ def _render_html(
     row_parts: list[str] = []
     for source in sources_in_order:
         region = _REGION_BY_SOURCE.get(source, "Int'l")
-        cards_for_source = _take_latest(by_source.get(source, []), 5)
+        cards_for_source = _take_latest(by_source.get(source, []), 6)
         if cards_for_source:
             cards_html = "\n".join(card_html(c, i) for i, c in enumerate(cards_for_source))
         else:
@@ -2137,8 +2137,8 @@ def _render_html(
                 /* Vertical card: image on top, text below. */
                 .card {{
                   grid-template-columns: 1fr !important;
-                  grid-template-rows: 110px auto !important;
-                  min-height: 230px !important;
+                  grid-template-rows: 96px auto !important;
+                  min-height: 205px !important;
                 }}
 
                 .card.noMedia {{
@@ -2150,8 +2150,8 @@ def _render_html(
                 .card.featured {{
                   grid-row: auto !important;
                   grid-template-columns: 1fr !important;
-                  grid-template-rows: 148px auto !important;
-                  min-height: 300px !important;
+                  grid-template-rows: 128px auto !important;
+                  min-height: 255px !important;
                 }}
 
                 /* On narrow screens, revert typography to the default (no "hero" fonts). */
@@ -2513,7 +2513,7 @@ def _render_html(
                       const container = row.querySelector(".rowCards");
                       if (!src || !container) return;
 
-                      const items = (bySource.get(src) || []).slice(0, 5);
+                      const items = (bySource.get(src) || []).slice(0, 6);
                       if (!items.length) return;
 
                       const isTextOnly = textOnly.has(src);
@@ -2791,7 +2791,7 @@ def main() -> int:
     print(f"Wrote {out_html}")
     # Expected card count is (sources * per-source target). If some sources are
     # temporarily blocked or return too few items, the actual count can be lower.
-    expected = 5 * len(_feed_specs())
+    expected = 6 * len(_feed_specs())
     print(f"Cards: {len(hydrated)} (aim is {expected})")
     return 0
 
