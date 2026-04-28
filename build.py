@@ -2087,7 +2087,7 @@ def _render_html(
               /* Each source section is: banner (left) + cards (right) */
               .row {{
                 display: grid;
-                grid-template-columns: 56px 1fr;
+                grid-template-columns: 46px 1fr;
                 gap: 14px;
                 position: relative;
                 padding: 12px;
@@ -2120,13 +2120,13 @@ def _render_html(
               }}
 
               @media (max-width: 1100px) {{
-                .row {{ grid-template-columns: 56px 1fr; }}
+                .row {{ grid-template-columns: 46px 1fr; }}
                 .rowCards {{ grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }}
               }}
 
               /* Narrow screens: switch back to the older vertical card layout. */
               @media (max-width: 720px) {{
-                .row {{ grid-template-columns: 48px 1fr; padding: 10px; border-radius: 16px; }}
+                .row {{ grid-template-columns: 44px 1fr; padding: 10px; border-radius: 16px; }}
                 .row::before {{ border-radius: 16px; }}
                 .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
 
@@ -2215,39 +2215,39 @@ def _render_html(
                 We keep these intentionally dark so white text stays readable.
                 Each is a subtle gradient so the banner still matches the page style.
               */
-              .row[data-source="The Economist"]::before {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.24), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Guardian"]::before {{ background: linear-gradient(180deg, rgba(0, 170, 255, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="Der Spiegel"]::before {{ background: linear-gradient(180deg, rgba(255, 0, 0, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="Deutsche Welle"]::before {{ background: linear-gradient(180deg, rgba(0, 120, 255, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Straits Times"]::before {{ background: linear-gradient(180deg, rgba(220, 38, 38, 0.20), rgba(255,255,255,0.04)); }}
-              .row[data-source="Associated Press"]::before {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="BBC News"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04)); }}
-              .row[data-source="Al Jazeera"]::before {{ background: linear-gradient(180deg, rgba(234, 179, 8, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="El País"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="Le Monde"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="France 24"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.22), rgba(255,255,255,0.04)); }}
-              .row[data-source="South China Morning Post"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.20), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Jerusalem Post"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.20), rgba(255,255,255,0.04)); }}
-              .row[data-source="AllAfrica"]::before {{ background: linear-gradient(180deg, rgba(22, 163, 74, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="EUobserver"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="BBC World Service"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Diplomat"]::before {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="Financial Times"]::before {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="USA Today"]::before {{ background: linear-gradient(180deg, rgba(14, 165, 233, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="Vox"]::before {{ background: linear-gradient(180deg, rgba(251, 146, 60, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="Axios"]::before {{ background: linear-gradient(180deg, rgba(34, 197, 94, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="WESA"]::before {{ background: linear-gradient(180deg, rgba(236, 72, 153, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="NEXTpittsburgh"]::before {{ background: linear-gradient(180deg, rgba(168, 85, 247, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="Pgh City Paper"]::before {{ background: linear-gradient(180deg, rgba(245, 158, 11, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="Pgh PublicSource"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="Trib|Live"]::before {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.16), rgba(255,255,255,0.04)); }}
-              .row[data-source="The New York Times"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Washington Post"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.04)); }}
-              .row[data-source="The Wall Street Journal"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="Süddeutsche Zeitung"]::before {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.20), rgba(255,255,255,0.04)); }}
-              .row[data-source="Tagesschau"]::before {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.20), rgba(255,255,255,0.04)); }}
-              .row[data-source="RNZ"]::before {{ background: linear-gradient(180deg, rgba(234, 88, 12, 0.18), rgba(255,255,255,0.04)); }}
-              .row[data-source="NZZ"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.04)); }}
+              .row[data-source="The Economist"]::before {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.32), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Guardian"]::before {{ background: linear-gradient(180deg, rgba(0, 170, 255, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="Der Spiegel"]::before {{ background: linear-gradient(180deg, rgba(255, 0, 0, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="Deutsche Welle"]::before {{ background: linear-gradient(180deg, rgba(0, 120, 255, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Straits Times"]::before {{ background: linear-gradient(180deg, rgba(220, 38, 38, 0.28), rgba(255,255,255,0.06)); }}
+              .row[data-source="Associated Press"]::before {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="BBC News"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06)); }}
+              .row[data-source="Al Jazeera"]::before {{ background: linear-gradient(180deg, rgba(234, 179, 8, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="El País"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="Le Monde"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="France 24"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.30), rgba(255,255,255,0.06)); }}
+              .row[data-source="South China Morning Post"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.28), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Jerusalem Post"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.28), rgba(255,255,255,0.06)); }}
+              .row[data-source="AllAfrica"]::before {{ background: linear-gradient(180deg, rgba(22, 163, 74, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="EUobserver"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="BBC World Service"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Diplomat"]::before {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Financial Times"]::before {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="USA Today"]::before {{ background: linear-gradient(180deg, rgba(14, 165, 233, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Vox"]::before {{ background: linear-gradient(180deg, rgba(251, 146, 60, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Axios"]::before {{ background: linear-gradient(180deg, rgba(34, 197, 94, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="WESA"]::before {{ background: linear-gradient(180deg, rgba(236, 72, 153, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="NEXTpittsburgh"]::before {{ background: linear-gradient(180deg, rgba(168, 85, 247, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="Pgh City Paper"]::before {{ background: linear-gradient(180deg, rgba(245, 158, 11, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="Pgh PublicSource"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="Trib|Live"]::before {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="The New York Times"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Washington Post"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.06)); }}
+              .row[data-source="The Wall Street Journal"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Süddeutsche Zeitung"]::before {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.26), rgba(255,255,255,0.06)); }}
+              .row[data-source="Tagesschau"]::before {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.26), rgba(255,255,255,0.06)); }}
+              .row[data-source="RNZ"]::before {{ background: linear-gradient(180deg, rgba(234, 88, 12, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="NZZ"]::before {{ background: linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06)); }}
 
               .card {{
                 /* Horizontal card: image left, text right */
