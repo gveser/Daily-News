@@ -2101,7 +2101,8 @@ def _render_html(
                 .row {{ grid-template-columns: 48px 1fr; }}
                 /* Phone layout: show 2 columns and drop subheader for height */
                 .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
-                .summary {{ display: none; }}
+                /* Use !important because later base rules also set display */
+                .summary {{ display: none !important; }}
                 .card {{ min-height: 230px; grid-template-rows: 110px auto; }}
                 .meta {{ padding: 10px 10px 12px; }}
               }}
