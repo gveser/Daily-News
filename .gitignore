@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+# Local build outputs
+dist/
+
+# Local metadata cache (rebuilt on demand)
+cache/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
