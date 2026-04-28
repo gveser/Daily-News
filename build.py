@@ -72,7 +72,6 @@ class FeedSpec:
 # Sources the user wants to render as text-only (no images shown).
 _TEXT_ONLY_SOURCES = {
     "The Economist",
-    "Agence France-Presse",
     "The Jerusalem Post",
     "The Washington Post",
 }
@@ -84,21 +83,41 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "The Economist": "UK",
     "The Guardian": "UK",
     "BBC News": "UK",
+    "Financial Times": "UK",
     # Germany
     "Der Spiegel": "DE",
     "Deutsche Welle": "DE",
+    "Süddeutsche Zeitung": "DE",
+    "Tagesschau": "DE",
+    "RNZ": "DE",
+    "NZZ": "EU",
     # Europe (EU)
-    "Agence France-Presse": "EU",
+    "Le Monde": "EU",
+    "El País": "EU",
+    "France 24": "EU",
+    "EUobserver": "EU",
     # United States
     "Associated Press": "US",
     "The New York Times": "US",
     "The Washington Post": "US",
     "The Wall Street Journal": "US",
+    "USA Today": "US",
+    "Vox": "US",
+    "Axios": "US",
+    # Pittsburgh (PGH)
+    "WESA": "PGH",
+    "NEXTpittsburgh": "PGH",
+    "Pgh City Paper": "PGH",
+    "Pgh PublicSource": "PGH",
+    "Trib|Live": "PGH",
     # International
-    "Al Jazeera": "Int'l",
     "The Straits Times": "Int'l",
     "South China Morning Post": "Int'l",
     "The Jerusalem Post": "Int'l",
+    "AllAfrica": "Int'l",
+    "Al Jazeera": "Int'l",
+    "BBC World Service": "Int'l",
+    "The Diplomat": "Int'l",
 }
 
 
@@ -185,6 +204,36 @@ def _new_http_session() -> requests.Session:
     return s
 
 
+def _resolve_news_link(session: requests.Session, url: str, timeout_s: int = 12) -> str:
+    """
+    Resolve aggregator links to their final destination URL (best-effort).
+
+    This helps when a feed item points to an aggregator wrapper (e.g. Google News),
+    which often prevents proper og:image extraction or image downloads.
+    """
+
+    try:
+        r = session.get(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=timeout_s,
+            allow_redirects=True,
+        )
+        r.raise_for_status()
+        final_url = str(r.url)
+        return final_url or url
+    except Exception:
+        return url
+
+
 def _feed_specs() -> list[FeedSpec]:
     """
     All news sources we show, in the exact order we render them.
@@ -256,17 +305,51 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="Al Jazeera",
-            homepage_url="https://www.aljazeera.com/",
-            urls=["https://www.aljazeera.com/xml/rss/all.xml"],
+            source="Financial Times",
+            homepage_url="https://www.ft.com/",
+            urls=["https://www.ft.com/rss/home"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="Agence France-Presse",
-            homepage_url="https://www.afp.com/en/news",
-            # AFP is often restrictive on homepage scraping; we use their feed endpoint
-            # for published communiqués as the most consistently accessible option.
-            urls=["https://www.afp.com/en/actus/afp_communique/all/feed"],
+            source="USA Today",
+            homepage_url="https://www.usatoday.com/",
+            # USA Today's historical rssfeeds.usatoday.com endpoints often redirect to HTML now.
+            # To keep this source reliable without brittle scraping, we use a Google News RSS
+            # query constrained to usatoday.com.
+            urls=["https://news.google.com/rss/search?q=site%3Ausatoday.com&hl=en-US&gl=US&ceid=US%3Aen"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Vox",
+            homepage_url="https://www.vox.com/",
+            urls=["https://www.vox.com/rss/index.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Axios",
+            homepage_url="https://www.axios.com/",
+            # Axios serves this feed from api.axios.com (via redirect), which is fine.
+            urls=["https://www.axios.com/feeds/feed.rss"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="El País",
+            homepage_url="https://elpais.com/",
+            # English edition:
+            urls=["https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="France 24",
+            homepage_url="https://www.france24.com/en/",
+            urls=["https://www.france24.com/en/rss"],
+            use_homepage_scrape=False,
+        ),
+        # Move Le Monde to the bottom of the EU group per request.
+        FeedSpec(
+            source="Le Monde",
+            homepage_url="https://www.lemonde.fr/",
+            urls=["https://www.lemonde.fr/rss/une.xml"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -275,6 +358,34 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://www.scmp.com/rss"],
             use_homepage_scrape=True,
             homepage_link_allow_regex=r"https://www\.scmp\.com/.+",
+        ),
+        FeedSpec(
+            source="AllAfrica",
+            homepage_url="https://allafrica.com/",
+            urls=["http://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="BBC World Service",
+            homepage_url="https://www.bbc.com/worldservice",
+            # BBC World Service RSS hub provides many language feeds, but not a
+            # dedicated "english.html". We use "mundo" (Spanish) would be wrong,
+            # so instead we use BBC World News RSS as an English proxy for World Service.
+            urls=["https://feeds.bbci.co.uk/news/world/rss.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="The Diplomat",
+            homepage_url="https://thediplomat.com/",
+            urls=["https://thediplomat.com/feed/"],
+            use_homepage_scrape=False,
+        ),
+        # Keep Al Jazeera as second-to-last in Int'l group (just above Jerusalem Post).
+        FeedSpec(
+            source="Al Jazeera",
+            homepage_url="https://www.aljazeera.com/",
+            urls=["https://www.aljazeera.com/xml/rss/all.xml"],
+            use_homepage_scrape=False,
         ),
         FeedSpec(
             source="The Jerusalem Post",
@@ -303,6 +414,72 @@ def _feed_specs() -> list[FeedSpec]:
                 "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
                 "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
             ],
+            use_homepage_scrape=False,
+        ),
+
+        # Additional German sources requested
+        FeedSpec(
+            source="Süddeutsche Zeitung",
+            homepage_url="https://www.sueddeutsche.de/",
+            urls=["https://rss.sueddeutsche.de/rss/Topthemen"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Tagesschau",
+            homepage_url="https://www.tagesschau.de/",
+            urls=["https://www.tagesschau.de/index~rss2.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="RNZ",
+            homepage_url="https://www.rnz.de/",
+            urls=["http://www.rnz.de/feed/136-RL_Topthemen_free.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="NZZ",
+            homepage_url="https://www.nzz.ch/",
+            urls=["https://www.nzz.ch/startseite.rss"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="EUobserver",
+            homepage_url="https://euobserver.com/",
+            urls=["https://euobserver.com/rss"],
+            use_homepage_scrape=False,
+        ),
+
+        # Pittsburgh local sources (PGH tab)
+        FeedSpec(
+            source="WESA",
+            homepage_url="https://www.wesa.fm/",
+            # WESA does not publish a stable, public RSS endpoint; use Google News RSS.
+            urls=["https://news.google.com/rss/search?q=site%3Awesa.fm&hl=en-US&gl=US&ceid=US%3Aen"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="NEXTpittsburgh",
+            homepage_url="https://nextpittsburgh.com/",
+            urls=["https://nextpittsburgh.com/feed/"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Pgh City Paper",
+            homepage_url="https://www.pghcitypaper.com/",
+            # Direct RSS endpoints frequently return 403 for scripted requests; use Google News RSS.
+            urls=["https://news.google.com/rss/search?q=site%3Apghcitypaper.com&hl=en-US&gl=US&ceid=US%3Aen"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Pgh PublicSource",
+            homepage_url="https://www.publicsource.org/",
+            urls=["https://www.publicsource.org/feed/"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Trib|Live",
+            homepage_url="https://triblive.com/",
+            urls=["https://triblive.com/category/top-stories/feed/"],
             use_homepage_scrape=False,
         ),
     ]
@@ -842,6 +1019,11 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "The Jerusalem Post",
         "The New York Times",
         "The Washington Post",
+        # New sources that often don't embed images in RSS:
+        "RNZ",
+        "EUobserver",
+        "AllAfrica",
+        "South China Morning Post",
     }
 
     # Cap number of enrichment fetches per source per run.
@@ -849,8 +1031,12 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "The Washington Post": 2,  # WaPo is slow; keep it very small
         "The New York Times": 4,
         "Deutsche Welle": 6,
-        "Al Jazeera": 6,
         "The Jerusalem Post": 6,
+        "Al Jazeera": 6,
+        "RNZ": 6,
+        "EUobserver": 6,
+        "AllAfrica": 6,
+        "South China Morning Post": 6,
     }
     used: dict[str, int] = {}
 
@@ -961,6 +1147,11 @@ def _fetch_article_meta(
 
     try:
         headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
@@ -1220,12 +1411,34 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
 
     exts = (".png", ".svg", ".webp", ".jpg", ".jpeg", ".ico")
 
+    # Some sites return tiny/blank favicons (e.g. a 1×1 pixel). If a *downloaded*
+    # favicon is suspiciously small, we treat it as invalid and try a different fallback.
+    #
+    # Important: we do NOT want to hide user-provided local icons just because they're
+    # small. A minimal ICO can legitimately be only a few hundred bytes.
+    min_downloaded_icon_bytes = 64
+
     # Extra filename aliases for common branding filenames.
     _ALIASES: dict[str, list[str]] = {
         "The Economist": ["economist", "theeconomist", "the_economist"],
         "The Guardian": ["guardian", "theguardian", "the_guardian"],
         "Al Jazeera": ["al-jazeera", "aljazeera"],
-        "Agence France-Presse": ["afp", "agence-france-presse"],
+        "El País": ["elpais", "el-pais"],
+        "Le Monde": ["lemonde", "le-monde"],
+        "France 24": ["france24", "france-24"],
+        "AllAfrica": ["allafrica", "all-africa"],
+        "EUobserver": ["euobserver", "eu-observer"],
+        "BBC World Service": ["bbc-world-service", "world-service", "bbc-ws"],
+        "The Diplomat": ["thediplomat", "the-diplomat", "diplomat"],
+        "Financial Times": ["ft", "financial-times"],
+        "USA Today": ["usa-today", "usatoday"],
+        "Vox": ["vox"],
+        "Axios": ["axios"],
+        "WESA": ["wesa", "90-5-wesa"],
+        "NEXTpittsburgh": ["nextpittsburgh", "next-pittsburgh"],
+        "Pgh City Paper": ["pghcitypaper", "pgh-city-paper", "pittsburgh-city-paper", "city-paper"],
+        "Pgh PublicSource": ["publicsource", "pgh-publicsource", "pittsburgh-publicsource"],
+        "Trib|Live": ["triblive", "trib-live", "trib"],
         "South China Morning Post": ["scmp", "south-china-morning-post"],
         "The Jerusalem Post": ["jerusalem-post", "jpost"],
         "The New York Times": ["nyt", "new-york-times"],
@@ -1234,6 +1447,27 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         "BBC News": ["bbc"],
         "Associated Press": ["ap", "associated-press"],
         "Deutsche Welle": ["dw", "deutsche-welle"],
+        "Süddeutsche Zeitung": ["sz", "sueddeutsche", "sueddeutsche-zeitung", "sueddeutschezeitung"],
+        "Tagesschau": ["tagesschau"],
+        "RNZ": ["rnz", "rhein-neckar-zeitung"],
+        "NZZ": ["nzz", "neue-zuercher-zeitung"],
+    }
+
+    # Per-source forced favicon endpoints (best-effort).
+    #
+    # BBC World Service's default page often redirects into BBC Sounds and can
+    # produce a non-representative (or tiny) icon. We instead pin to BBC's main favicon.
+    _FORCED_ICON_URL: dict[str, str] = {
+        "BBC World Service": "https://www.bbc.com/favicon.ico",
+        "Deutsche Welle": "https://www.dw.com/favicon.ico",
+        "RNZ": "https://www.rnz.de/favicon.ico",
+        "Le Monde": "https://www.lemonde.fr/favicon.ico",
+        "South China Morning Post": "https://www.scmp.com/favicon.ico",
+        "The Diplomat": "https://thediplomat.com/favicon.ico",
+        "The Jerusalem Post": "https://www.jpost.com/favicon.ico",
+        "USA Today": "https://www.usatoday.com/favicon.ico",
+        "Vox": "https://www.vox.com/static-assets/icons/favicon.ico",
+        "Axios": "https://www.axios.com/favicon.ico",
     }
 
     def _find_local_file(slug: str) -> Optional[Path]:
@@ -1266,17 +1500,20 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         # Fallback: download favicon into icons/ (only when no local asset).
         out_path = icons_dir / f"{slug}.ico"
         icon_url: Optional[str] = None
+        if source in _FORCED_ICON_URL:
+            icon_url = _FORCED_ICON_URL[source]
         try:
-            html_text = _fetch_html(homepage, timeout_s=20)
-            soup = BeautifulSoup(html_text, "html.parser")
-            for rel in ("icon", "shortcut icon", "apple-touch-icon"):
-                tag = soup.find(
-                    "link",
-                    rel=lambda v: isinstance(v, (str, list)) and rel in (v if isinstance(v, str) else " ".join(v)),
-                )
-                if tag and tag.get("href"):
-                    icon_url = _normalize_url(homepage, str(tag.get("href")))
-                    break
+            if not icon_url:
+                html_text = _fetch_html(homepage, timeout_s=20)
+                soup = BeautifulSoup(html_text, "html.parser")
+                for rel in ("icon", "shortcut icon", "apple-touch-icon"):
+                    tag = soup.find(
+                        "link",
+                        rel=lambda v: isinstance(v, (str, list)) and rel in (v if isinstance(v, str) else " ".join(v)),
+                    )
+                    if tag and tag.get("href"):
+                        icon_url = _normalize_url(homepage, str(tag.get("href")))
+                        break
         except Exception:
             icon_url = None
 
@@ -1292,7 +1529,9 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
             r.raise_for_status()
             with open(out_path, "wb") as f:
                 f.write(r.content)
-            if out_path.exists() and out_path.stat().st_size > 0:
+            # If the downloaded icon is too tiny, treat it as invalid so we don't
+            # “successfully” cache a blank 1×1 pixel.
+            if out_path.exists() and out_path.stat().st_size >= min_downloaded_icon_bytes:
                 out[source] = f"static/icons/{out_path.name}"
         except Exception:
             continue
@@ -1357,6 +1596,7 @@ def _collect_headlines() -> list[Headline]:
     feeds: list[FeedSpec] = _feed_specs()
 
     all_items: list[Headline] = []
+    session = _new_http_session()
 
     for spec in feeds:
         # For most sources, RSS is "latest in a section", which is often *not*
@@ -1490,6 +1730,10 @@ def _collect_headlines() -> list[Headline]:
             image_url = _extract_image_url(entry)
             summary = _extract_entry_summary(entry)
 
+            # If the feed link is an aggregator wrapper, resolve to the real article.
+            if "news.google.com/rss/articles" in link:
+                link = _resolve_news_link(session, link)
+
             # Straits Times: their RSS does not include media tags at all, but the
             # article pages do include og:image, and they are fetchable (no CF block),
             # so we enrich missing images from the article HTML.
@@ -1535,14 +1779,13 @@ def _render_html(
     def card_html(c: Headline) -> str:
         is_text_only = c.source in _TEXT_ONLY_SOURCES
 
-        img_html = ""
-        if (not is_text_only) and c.image_path:
-            img_html = f'<img class="thumb" src="{esc(c.image_path)}" alt=""/>'
+        has_image = (not is_text_only) and bool(c.image_path)
+        img_html = f'<img class="thumb" src="{esc(c.image_path)}" alt=""/>' if has_image else ""
         summary_html = f'<div class="summary">{esc(c.summary)}</div>' if c.summary else ""
 
         media_html = ""
         card_class = "card"
-        if is_text_only:
+        if is_text_only or (not has_image):
             card_class = "card noMedia"
         else:
             media_html = f'<div class="media">{img_html}</div>'
@@ -1674,6 +1917,7 @@ def _render_html(
               .headerLeft {{
                 display: grid;
                 gap: 10px;
+                min-width: 0;
               }}
 
               .headerRight {{
@@ -1686,11 +1930,24 @@ def _render_html(
                 margin: 0;
                 font-size: 22px;
                 letter-spacing: 0.2px;
+                white-space: nowrap;
+              }}
+
+              /* Give the title+controls more horizontal room on small screens */
+              @media (max-width: 980px) {{
+                header {{
+                  flex-wrap: wrap;
+                }}
+                .headerRight {{
+                  width: 100%;
+                  justify-content: flex-start;
+                }}
               }}
               .regionBar {{
                 display: flex;
-                gap: 8px;
-                flex-wrap: wrap;
+                gap: 6px;
+                flex-wrap: nowrap;
+                overflow-x: hidden;
               }}
 
               .regionBtn {{
@@ -1698,13 +1955,13 @@ def _render_html(
                 border: 1px solid var(--border);
                 background: rgba(255,255,255,0.06);
                 color: rgba(255,255,255,0.86);
-                padding: 6px 10px;
-                border-radius: 999px;
-                font-size: 12px;
+                padding: 5px 7px;
+                border-radius: 10px;
+                font-size: 11px;
                 cursor: pointer;
                 transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
                 display: inline-flex;
-                gap: 8px;
+                gap: 6px;
                 align-items: center;
                 user-select: none;
               }}
@@ -1722,8 +1979,18 @@ def _render_html(
               }}
 
               .flag {{
-                font-size: 14px;
-                line-height: 1;
+                width: 16px;
+                height: 12px;
+                display: inline-block;
+                flex: 0 0 auto;
+              }}
+
+              .flag svg {{
+                width: 16px;
+                height: 12px;
+                display: block;
+                border-radius: 2px;
+                box-shadow: 0 0 0 1px rgba(255,255,255,0.10) inset;
               }}
 
               .date {{
@@ -1826,12 +2093,17 @@ def _render_html(
 
               @media (max-width: 1100px) {{
                 .row {{ grid-template-columns: 56px 1fr; }}
-                .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+                /* Keep at least 3 items visible per row */
+                .rowCards {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
               }}
 
               @media (max-width: 640px) {{
                 .row {{ grid-template-columns: 48px 1fr; }}
-                .rowCards {{ grid-template-columns: 1fr; }}
+                /* Even on small screens: show 3 columns; drop subheader for space */
+                .rowCards {{ grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
+                .summary {{ display: none; }}
+                .card {{ min-height: 230px; grid-template-rows: 110px auto; }}
+                .meta {{ padding: 10px 10px 12px; }}
               }}
 
               .banner {{
@@ -1890,12 +2162,31 @@ def _render_html(
               .banner[data-source="Associated Press"] {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.32), rgba(255,255,255,0.06)); }}
               .banner[data-source="BBC News"] {{ background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.06)); }}
               .banner[data-source="Al Jazeera"] {{ background: linear-gradient(180deg, rgba(234, 179, 8, 0.30), rgba(255,255,255,0.06)); }}
-              .banner[data-source="Agence France-Presse"] {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.30), rgba(255,255,255,0.06)); }}
+              .banner[data-source="El País"] {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.30), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Le Monde"] {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="France 24"] {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.30), rgba(255,255,255,0.06)); }}
               .banner[data-source="South China Morning Post"] {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.28), rgba(255,255,255,0.06)); }}
               .banner[data-source="The Jerusalem Post"] {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.28), rgba(255,255,255,0.06)); }}
+              .banner[data-source="AllAfrica"] {{ background: linear-gradient(180deg, rgba(22, 163, 74, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="EUobserver"] {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.24), rgba(255,255,255,0.06)); }}
+              .banner[data-source="BBC World Service"] {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="The Diplomat"] {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Financial Times"] {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="USA Today"] {{ background: linear-gradient(180deg, rgba(14, 165, 233, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Vox"] {{ background: linear-gradient(180deg, rgba(251, 146, 60, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Axios"] {{ background: linear-gradient(180deg, rgba(34, 197, 94, 0.18), rgba(255,255,255,0.06)); }}
+              .banner[data-source="WESA"] {{ background: linear-gradient(180deg, rgba(236, 72, 153, 0.18), rgba(255,255,255,0.06)); }}
+              .banner[data-source="NEXTpittsburgh"] {{ background: linear-gradient(180deg, rgba(168, 85, 247, 0.18), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Pgh City Paper"] {{ background: linear-gradient(180deg, rgba(245, 158, 11, 0.18), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Pgh PublicSource"] {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.18), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Trib|Live"] {{ background: linear-gradient(180deg, rgba(239, 68, 68, 0.18), rgba(255,255,255,0.06)); }}
               .banner[data-source="The New York Times"] {{ background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06)); }}
               .banner[data-source="The Washington Post"] {{ background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06)); }}
               .banner[data-source="The Wall Street Journal"] {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.22), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Süddeutsche Zeitung"] {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.28), rgba(255,255,255,0.06)); }}
+              .banner[data-source="Tagesschau"] {{ background: linear-gradient(180deg, rgba(30, 64, 175, 0.28), rgba(255,255,255,0.06)); }}
+              .banner[data-source="RNZ"] {{ background: linear-gradient(180deg, rgba(234, 88, 12, 0.24), rgba(255,255,255,0.06)); }}
+              .banner[data-source="NZZ"] {{ background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.06)); }}
 
               .card {{
                 display: grid;
@@ -1913,6 +2204,7 @@ def _render_html(
 
               .card.noMedia {{
                 grid-template-rows: auto;
+                min-height: 220px;
               }}
 
               .card:hover {{
@@ -1972,11 +2264,100 @@ def _render_html(
                 <div class="headerLeft">
                   <h1>News of the Day <span class="date">{html.escape(date_str)}</span></h1>
                   <div class="regionBar" role="group" aria-label="Select news region">
-                    <button class="regionBtn" type="button" data-region="UK" aria-pressed="false"><span class="flag">🇬🇧</span><span>UK</span></button>
-                    <button class="regionBtn" type="button" data-region="DE" aria-pressed="false"><span class="flag">🇩🇪</span><span>DE</span></button>
-                    <button class="regionBtn" type="button" data-region="EU" aria-pressed="false"><span class="flag">🇪🇺</span><span>EU</span></button>
-                    <button class="regionBtn" type="button" data-region="Int'l" aria-pressed="false"><span class="flag">🇺🇳</span><span>Int'l</span></button>
-                    <button class="regionBtn" type="button" data-region="US" aria-pressed="false"><span class="flag">🇺🇸</span><span>US</span></button>
+                    <button class="regionBtn" type="button" data-region="UK" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#0A2A66"/>
+                          <!-- diagonals (white) -->
+                          <path d="M0 0 L2.2 0 L16 8.6 L16 12 L13.8 12 L0 3.4 Z" fill="#FFFFFF" opacity="0.95"/>
+                          <path d="M16 0 L13.8 0 L0 8.6 L0 12 L2.2 12 L16 3.4 Z" fill="#FFFFFF" opacity="0.95"/>
+                          <!-- diagonals (red) -->
+                          <path d="M0 0 L1.3 0 L16 9.2 L16 12 L14.7 12 L0 2.8 Z" fill="#C8102E" opacity="0.95"/>
+                          <path d="M16 0 L14.7 0 L0 9.2 L0 12 L1.3 12 L16 2.8 Z" fill="#C8102E" opacity="0.95"/>
+                          <!-- central cross (white then red) -->
+                          <rect x="6.2" width="3.6" height="12" fill="#FFFFFF"/>
+                          <rect y="4.2" width="16" height="3.6" fill="#FFFFFF"/>
+                          <rect x="6.8" width="2.4" height="12" fill="#C8102E"/>
+                          <rect y="4.8" width="16" height="2.4" fill="#C8102E"/>
+                        </svg>
+                      </span>
+                      <span>UK</span>
+                    </button>
+                    <button class="regionBtn" type="button" data-region="DE" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="4" y="0" fill="#000000"/>
+                          <rect width="16" height="4" y="4" fill="#DD0000"/>
+                          <rect width="16" height="4" y="8" fill="#FFCE00"/>
+                        </svg>
+                      </span>
+                      <span>DE</span>
+                    </button>
+                    <button class="regionBtn" type="button" data-region="EU" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#003399"/>
+                          <!-- simplified EU emblem -->
+                          <circle cx="8" cy="6" r="2.3" fill="none" stroke="#FFCC00" stroke-width="0.9" opacity="0.95"/>
+                        </svg>
+                      </span>
+                      <span>EU</span>
+                    </button>
+                    <button class="regionBtn" type="button" data-region="Int'l" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#5DADE2"/>
+                          <!-- simplified UN emblem -->
+                          <circle cx="8" cy="6" r="2.6" fill="none" stroke="#FFFFFF" stroke-width="0.9" opacity="0.95"/>
+                          <path d="M6.3 6h3.4" stroke="#FFFFFF" stroke-width="0.8" opacity="0.95"/>
+                          <path d="M8 3.6v4.8" stroke="#FFFFFF" stroke-width="0.6" opacity="0.7"/>
+                        </svg>
+                      </span>
+                      <span>Int'l</span>
+                    </button>
+                    <button class="regionBtn" type="button" data-region="US" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#FFFFFF"/>
+                          <g fill="#B22234">
+                            <rect y="0" width="16" height="1"/>
+                            <rect y="2" width="16" height="1"/>
+                            <rect y="4" width="16" height="1"/>
+                            <rect y="6" width="16" height="1"/>
+                            <rect y="8" width="16" height="1"/>
+                            <rect y="10" width="16" height="1"/>
+                          </g>
+                          <rect width="7" height="6" fill="#3C3B6E"/>
+                          <g fill="#FFFFFF" opacity="0.9">
+                            <circle cx="1.1" cy="1.0" r="0.25"/><circle cx="2.3" cy="1.0" r="0.25"/><circle cx="3.5" cy="1.0" r="0.25"/><circle cx="4.7" cy="1.0" r="0.25"/><circle cx="5.9" cy="1.0" r="0.25"/>
+                            <circle cx="1.7" cy="2.0" r="0.25"/><circle cx="2.9" cy="2.0" r="0.25"/><circle cx="4.1" cy="2.0" r="0.25"/><circle cx="5.3" cy="2.0" r="0.25"/>
+                            <circle cx="1.1" cy="3.0" r="0.25"/><circle cx="2.3" cy="3.0" r="0.25"/><circle cx="3.5" cy="3.0" r="0.25"/><circle cx="4.7" cy="3.0" r="0.25"/><circle cx="5.9" cy="3.0" r="0.25"/>
+                            <circle cx="1.7" cy="4.0" r="0.25"/><circle cx="2.9" cy="4.0" r="0.25"/><circle cx="4.1" cy="4.0" r="0.25"/><circle cx="5.3" cy="4.0" r="0.25"/>
+                            <circle cx="1.1" cy="5.0" r="0.25"/><circle cx="2.3" cy="5.0" r="0.25"/><circle cx="3.5" cy="5.0" r="0.25"/><circle cx="4.7" cy="5.0" r="0.25"/><circle cx="5.9" cy="5.0" r="0.25"/>
+                          </g>
+                        </svg>
+                      </span>
+                      <span>US</span>
+                    </button>
+                    <button class="regionBtn" type="button" data-region="PGH" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <!-- simple Pittsburgh skyline icon -->
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#111827"/>
+                          <rect y="9.2" width="16" height="2.8" fill="#0B1220"/>
+                          <g fill="#94A3B8" opacity="0.95">
+                            <rect x="1.2" y="5.2" width="2.0" height="4.0" rx="0.2"/>
+                            <rect x="3.6" y="3.8" width="2.2" height="5.4" rx="0.2"/>
+                            <rect x="6.2" y="4.6" width="1.8" height="4.6" rx="0.2"/>
+                            <rect x="8.4" y="2.8" width="2.4" height="6.4" rx="0.2"/>
+                            <rect x="11.2" y="4.2" width="1.6" height="5.0" rx="0.2"/>
+                            <rect x="13.2" y="5.6" width="1.6" height="3.6" rx="0.2"/>
+                          </g>
+                          <path d="M0 9.2 C 4 8.4, 7 10.0, 10 9.2 C 12.2 8.6, 13.4 8.8, 16 9.2 L16 12 L0 12 Z" fill="#0F172A" opacity="0.9"/>
+                        </svg>
+                      </span>
+                      <span>PGH</span>
+                    </button>
                   </div>
                 </div>
                 <div class="headerRight">
@@ -1995,7 +2376,7 @@ def _render_html(
               // we can fetch /api/news and refresh the visible cards without
               // re-running build.py.
               (function () {{
-                // Region filter (UK / DE / EU / Int'l / US).
+                // Region filter (UK / DE / EU / Int'l / US / PGH).
                 (function () {{
                   const KEY = "newsOfTheDay.region";
                   const buttons = Array.from(document.querySelectorAll(".regionBtn"));
@@ -2060,10 +2441,11 @@ def _render_html(
                         const summary = esc(x.summary);
                         const link = x.link || "#";
 
-                        const media = (!isTextOnly && x.image_url)
+                        const hasImage = (!isTextOnly && x.image_url);
+                        const media = hasImage
                           ? `<div class="media"><img class="thumb" src="${{x.image_url}}" alt=""/></div>`
                           : "";
-                        const cls = isTextOnly ? "card noMedia" : "card";
+                        const cls = (isTextOnly || !hasImage) ? "card noMedia" : "card";
                         const summaryBlock = summary ? `<div class="summary">${{summary}}</div>` : "";
 
                         return (
