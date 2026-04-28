@@ -2,6 +2,9 @@ name: Build and deploy News of the Day
 
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
   schedule:
     # Every 2 hours. Adjust to taste.
     - cron: "0 */2 * * *"
