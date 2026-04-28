@@ -1892,7 +1892,8 @@ def _render_html(
                 --panel2: rgba(255,255,255,0.09);
                 --text: rgba(255,255,255,0.92);
                 --muted: rgba(255,255,255,0.70);
-                --border: rgba(255,255,255,0.12);
+                /* Slightly stronger borders for outlines */
+                --border: rgba(255,255,255,0.18);
                 --shadow: 0 10px 30px rgba(0,0,0,0.35);
               }}
 
@@ -2087,7 +2088,7 @@ def _render_html(
               /* Each source section is: banner (left) + cards (right) */
               .row {{
                 display: grid;
-                grid-template-columns: 46px 1fr;
+                grid-template-columns: 34px 1fr;
                 gap: 14px;
                 position: relative;
                 padding: 12px;
@@ -2120,13 +2121,13 @@ def _render_html(
               }}
 
               @media (max-width: 1100px) {{
-                .row {{ grid-template-columns: 46px 1fr; }}
+                .row {{ grid-template-columns: 34px 1fr; }}
                 .rowCards {{ grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }}
               }}
 
               /* Narrow screens: switch back to the older vertical card layout. */
               @media (max-width: 720px) {{
-                .row {{ grid-template-columns: 44px 1fr; padding: 10px; border-radius: 16px; }}
+                .row {{ grid-template-columns: 32px 1fr; padding: 10px; border-radius: 16px; }}
                 .row::before {{ border-radius: 16px; }}
                 .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
 
@@ -2203,7 +2204,7 @@ def _render_html(
                 writing-mode: vertical-rl;
                 transform: rotate(180deg);
                 letter-spacing: 0.4px;
-                font-size: 17px;
+                font-size: 19px;
                 font-weight: 600;
                 color: rgba(255,255,255,0.88);
                 padding: 10px 0;
