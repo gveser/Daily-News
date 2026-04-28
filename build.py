@@ -245,6 +245,13 @@ def _feed_specs() -> list[FeedSpec]:
     return [
         # Existing sources
         FeedSpec(
+            source="The Guardian",
+            homepage_url="https://www.theguardian.com/",
+            urls=["https://www.theguardian.com/world/rss"],
+            use_homepage_scrape=True,
+            homepage_link_allow_regex=r"https://www\.theguardian\.com/.+/\d{4}/[a-z]{3}/\d{1,2}/",
+        ),
+        FeedSpec(
             source="The Economist",
             homepage_url="https://www.economist.com/",
             urls=[
@@ -257,20 +264,20 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="The Guardian",
-            homepage_url="https://www.theguardian.com/",
-            urls=["https://www.theguardian.com/world/rss"],
-            use_homepage_scrape=True,
-            homepage_link_allow_regex=r"https://www\.theguardian\.com/.+/\d{4}/[a-z]{3}/\d{1,2}/",
-        ),
-        FeedSpec(
             source="Der Spiegel",
             homepage_url="https://www.spiegel.de/",
             urls=["https://www.spiegel.de/schlagzeilen/index.rss"],
             use_homepage_scrape=True,
             homepage_link_allow_regex=r"https://www\.spiegel\.de/.+-a-[0-9a-f-]{6,}",
         ),
-        # Inserted directly below Spiegel per request
+        # Germany: Tagesschau should be #2
+        FeedSpec(
+            source="Tagesschau",
+            homepage_url="https://www.tagesschau.de/",
+            urls=["https://www.tagesschau.de/index~rss2.xml"],
+            use_homepage_scrape=False,
+        ),
+        # Deutsche Welle (kept near top German sources)
         FeedSpec(
             source="Deutsche Welle",
             homepage_url="https://www.dw.com/",
@@ -281,6 +288,32 @@ def _feed_specs() -> list[FeedSpec]:
             ],
             use_homepage_scrape=True,
             homepage_link_allow_regex=r"https://www\.dw\.com/.+/a-\d+",
+        ),
+        FeedSpec(
+            source="Süddeutsche Zeitung",
+            homepage_url="https://www.sueddeutsche.de/",
+            urls=["https://rss.sueddeutsche.de/rss/Topthemen"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="RNZ",
+            homepage_url="https://www.rnz.de/",
+            urls=["http://www.rnz.de/feed/136-RL_Topthemen_free.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="BBC World Service",
+            homepage_url="https://www.bbc.com/worldservice",
+            # BBC World Service RSS hub provides many language feeds, but not a
+            # dedicated "english.html". We use BBC World News RSS as an English proxy.
+            urls=["https://feeds.bbci.co.uk/news/world/rss.xml"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="The Diplomat",
+            homepage_url="https://thediplomat.com/",
+            urls=["https://thediplomat.com/feed/"],
+            use_homepage_scrape=False,
         ),
         FeedSpec(
             source="The Straits Times",
@@ -311,15 +344,6 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="USA Today",
-            homepage_url="https://www.usatoday.com/",
-            # USA Today's historical rssfeeds.usatoday.com endpoints often redirect to HTML now.
-            # To keep this source reliable without brittle scraping, we use a Google News RSS
-            # query constrained to usatoday.com.
-            urls=["https://news.google.com/rss/search?q=site%3Ausatoday.com&hl=en-US&gl=US&ceid=US%3Aen"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="Vox",
             homepage_url="https://www.vox.com/",
             urls=["https://www.vox.com/rss/index.xml"],
@@ -333,23 +357,23 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="El País",
-            homepage_url="https://elpais.com/",
-            # English edition:
-            urls=["https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="France 24",
             homepage_url="https://www.france24.com/en/",
             urls=["https://www.france24.com/en/rss"],
             use_homepage_scrape=False,
         ),
-        # Move Le Monde to the bottom of the EU group per request.
         FeedSpec(
             source="Le Monde",
             homepage_url="https://www.lemonde.fr/",
             urls=["https://www.lemonde.fr/rss/une.xml"],
+            use_homepage_scrape=False,
+        ),
+        # El País below the two French sources
+        FeedSpec(
+            source="El País",
+            homepage_url="https://elpais.com/",
+            # English edition:
+            urls=["https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -363,21 +387,6 @@ def _feed_specs() -> list[FeedSpec]:
             source="AllAfrica",
             homepage_url="https://allafrica.com/",
             urls=["http://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="BBC World Service",
-            homepage_url="https://www.bbc.com/worldservice",
-            # BBC World Service RSS hub provides many language feeds, but not a
-            # dedicated "english.html". We use "mundo" (Spanish) would be wrong,
-            # so instead we use BBC World News RSS as an English proxy for World Service.
-            urls=["https://feeds.bbci.co.uk/news/world/rss.xml"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="The Diplomat",
-            homepage_url="https://thediplomat.com/",
-            urls=["https://thediplomat.com/feed/"],
             use_homepage_scrape=False,
         ),
         # Keep Al Jazeera as second-to-last in Int'l group (just above Jerusalem Post).
@@ -416,26 +425,17 @@ def _feed_specs() -> list[FeedSpec]:
             ],
             use_homepage_scrape=False,
         ),
+        # US: USA Today should be last
+        FeedSpec(
+            source="USA Today",
+            homepage_url="https://www.usatoday.com/",
+            # USA Today's historical rssfeeds.usatoday.com endpoints often redirect to HTML now.
+            # To keep this source reliable without brittle scraping, we use a Google News RSS
+            # query constrained to usatoday.com.
+            urls=["https://news.google.com/rss/search?q=site%3Ausatoday.com&hl=en-US&gl=US&ceid=US%3Aen"],
+            use_homepage_scrape=False,
+        ),
 
-        # Additional German sources requested
-        FeedSpec(
-            source="Süddeutsche Zeitung",
-            homepage_url="https://www.sueddeutsche.de/",
-            urls=["https://rss.sueddeutsche.de/rss/Topthemen"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="Tagesschau",
-            homepage_url="https://www.tagesschau.de/",
-            urls=["https://www.tagesschau.de/index~rss2.xml"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="RNZ",
-            homepage_url="https://www.rnz.de/",
-            urls=["http://www.rnz.de/feed/136-RL_Topthemen_free.xml"],
-            use_homepage_scrape=False,
-        ),
         FeedSpec(
             source="NZZ",
             homepage_url="https://www.nzz.ch/",
@@ -1591,7 +1591,8 @@ def _collect_headlines() -> list[Headline]:
     If a feed has fewer items, we just take what is available.
     """
 
-    per_source_target = 6
+    # Number of top items to show per source.
+    per_source_target = 5
 
     feeds: list[FeedSpec] = _feed_specs()
 
@@ -1776,7 +1777,7 @@ def _render_html(
     for c in cards:
         by_source.setdefault(c.source, []).append(c)
 
-    def card_html(c: Headline) -> str:
+    def card_html(c: Headline, idx_in_source: int) -> str:
         is_text_only = c.source in _TEXT_ONLY_SOURCES
 
         has_image = (not is_text_only) and bool(c.image_path)
@@ -1785,8 +1786,11 @@ def _render_html(
 
         media_html = ""
         card_class = "card"
+        if idx_in_source == 0:
+            card_class += " featured"
         if is_text_only or (not has_image):
-            card_class = "card noMedia"
+            # Keep "featured" for the top story even when it's text-only.
+            card_class = "card noMedia" + (" featured" if idx_in_source == 0 else "")
         else:
             media_html = f'<div class="media">{img_html}</div>'
 
@@ -1807,9 +1811,9 @@ def _render_html(
     row_parts: list[str] = []
     for source in sources_in_order:
         region = _REGION_BY_SOURCE.get(source, "Int'l")
-        cards_for_source = _take_latest(by_source.get(source, []), 6)
+        cards_for_source = _take_latest(by_source.get(source, []), 5)
         if cards_for_source:
-            cards_html = "\n".join(card_html(c) for c in cards_for_source)
+            cards_html = "\n".join(card_html(c, i) for i, c in enumerate(cards_for_source))
         else:
             # If a source is blocked (403/401) or their feed structure changes,
             # we still render the row so the user can see the source exists.
@@ -1878,7 +1882,9 @@ def _render_html(
           <head>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <title>News of the Day</title>
+            <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
+            <link rel="alternate icon" href="static/favicon.svg" type="image/svg+xml" />
+            <title>Goetz&#x27;s Daily News</title>
             <style>
               :root {{
                 --bg: #0b0f17;
@@ -2087,23 +2093,45 @@ def _render_html(
 
               .rowCards {{
                 display: grid;
-                grid-template-columns: repeat(6, minmax(0, 1fr));
+                /* New layout: 3 columns with a wider featured column */
+                grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
                 gap: 14px;
+                grid-auto-flow: dense;
               }}
 
               @media (max-width: 1100px) {{
                 .row {{ grid-template-columns: 56px 1fr; }}
-                /* Keep at least 3 items visible per row */
-                .rowCards {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+                .rowCards {{ grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }}
               }}
 
-              @media (max-width: 640px) {{
+              /* Narrow screens: switch back to the older vertical card layout. */
+              @media (max-width: 720px) {{
                 .row {{ grid-template-columns: 48px 1fr; }}
-                /* Phone layout: show 2 columns and drop subheader for height */
                 .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
-                /* Use !important because later base rules also set display */
+
+                /* Drop subheader for height (and to match the previous mobile layout). */
                 .summary {{ display: none !important; }}
-                .card {{ min-height: 230px; grid-template-rows: 110px auto; }}
+
+                /* Vertical card: image on top, text below. */
+                .card {{
+                  grid-template-columns: 1fr !important;
+                  grid-template-rows: 110px auto !important;
+                  min-height: 230px !important;
+                }}
+
+                .card.noMedia {{
+                  grid-template-rows: auto !important;
+                  min-height: 160px !important;
+                }}
+
+                /* Featured should stop spanning rows on narrow screens. */
+                .card.featured {{
+                  grid-row: auto !important;
+                  grid-template-columns: 1fr !important;
+                  grid-template-rows: 148px auto !important;
+                  min-height: 300px !important;
+                }}
+
                 .meta {{ padding: 10px 10px 12px; }}
               }}
 
@@ -2190,8 +2218,10 @@ def _render_html(
               .banner[data-source="NZZ"] {{ background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.06)); }}
 
               .card {{
+                /* Horizontal card: image left, text right */
                 display: grid;
-                grid-template-rows: 148px auto;
+                grid-template-columns: 110px 1fr;
+                align-items: stretch;
                 text-decoration: none;
                 color: inherit;
                 background: linear-gradient(180deg, var(--panel2), var(--panel));
@@ -2200,12 +2230,35 @@ def _render_html(
                 overflow: hidden;
                 box-shadow: var(--shadow);
                 transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
-                min-height: 320px;
+                min-height: 118px;
+              }}
+
+              /* Featured item: double height, bigger typography */
+              .card.featured {{
+                grid-row: span 2;
+                grid-template-columns: 160px 1fr;
+                min-height: 250px;
+              }}
+
+              .card.featured .title {{
+                font-size: 18px;
+                line-height: 1.2;
+              }}
+
+              .card.featured .summary {{
+                font-size: 13px;
+                -webkit-line-clamp: 6;
               }}
 
               .card.noMedia {{
-                grid-template-rows: auto;
-                min-height: 220px;
+                grid-template-columns: 1fr;
+                min-height: 96px;
+              }}
+
+              /* Featured text-only card: still double height + larger typography */
+              .card.noMedia.featured {{
+                grid-row: span 2;
+                min-height: 250px;
               }}
 
               .card:hover {{
@@ -2226,9 +2279,10 @@ def _render_html(
               }}
 
               .meta {{
-                padding: 12px 12px 14px;
+                padding: 12px 12px 12px;
                 display: grid;
                 gap: 8px;
+                align-content: start;
               }}
 
               .empty {{
@@ -2253,7 +2307,7 @@ def _render_html(
                 font-size: 12px;
                 line-height: 1.25;
                 display: -webkit-box;
-                -webkit-line-clamp: 6;
+                -webkit-line-clamp: 3;
                 -webkit-box-orient: vertical;
                 overflow: hidden;
               }}
@@ -2263,7 +2317,7 @@ def _render_html(
             <div class="wrap">
               <header>
                 <div class="headerLeft">
-                  <h1>News of the Day <span class="date">{html.escape(date_str)}</span></h1>
+                  <h1>Goetz&#x27;s Daily News <span class="date">{html.escape(date_str)}</span></h1>
                   <div class="regionBar" role="group" aria-label="Select news region">
                     <button class="regionBtn" type="button" data-region="UK" aria-pressed="false">
                       <span class="flag" aria-hidden="true">
@@ -2426,7 +2480,7 @@ def _render_html(
                       const container = row.querySelector(".rowCards");
                       if (!src || !container) return;
 
-                      const items = (bySource.get(src) || []).slice(0, 6);
+                      const items = (bySource.get(src) || []).slice(0, 5);
                       if (!items.length) return;
 
                       const isTextOnly = textOnly.has(src);
@@ -2437,7 +2491,7 @@ def _render_html(
                           .replaceAll(">", "&gt;");
                       }}
 
-                      container.innerHTML = items.map((x) => {{
+                      container.innerHTML = items.map((x, idx) => {{
                         const title = esc(x.title);
                         const summary = esc(x.summary);
                         const link = x.link || "#";
@@ -2446,7 +2500,8 @@ def _render_html(
                         const media = hasImage
                           ? `<div class="media"><img class="thumb" src="${{x.image_url}}" alt=""/></div>`
                           : "";
-                        const cls = (isTextOnly || !hasImage) ? "card noMedia" : "card";
+                        let cls = (isTextOnly || !hasImage) ? "card noMedia" : "card";
+                        if (idx === 0) cls += " featured";
                         const summaryBlock = summary ? `<div class="summary">${{summary}}</div>` : "";
 
                         return (
@@ -2703,7 +2758,7 @@ def main() -> int:
     print(f"Wrote {out_html}")
     # Expected card count is (sources * per-source target). If some sources are
     # temporarily blocked or return too few items, the actual count can be lower.
-    expected = 6 * len(_feed_specs())
+    expected = 5 * len(_feed_specs())
     print(f"Cards: {len(hydrated)} (aim is {expected})")
     return 0
 
