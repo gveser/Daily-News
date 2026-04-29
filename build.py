@@ -121,6 +121,269 @@ _REGION_BY_SOURCE: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class TopTopic:
+    """
+    One "top news" topic cluster across many sources.
+
+    - title: short label shown above the cluster panel
+    - items: the individual headlines that were grouped into this topic
+    """
+
+    title: str
+    items: list["Headline"]
+
+
+def _tokenize_for_topic(text: str) -> list[str]:
+    """
+    Turn headline text into a list of normalized tokens for rough topic grouping.
+
+    We intentionally keep this lightweight (no external NLP dependencies):
+    - lower-case
+    - keep only a–z/0–9 words
+    - remove common stopwords
+    - drop very short tokens
+    """
+
+    stop = {
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "to",
+        "of",
+        "in",
+        "on",
+        "for",
+        "with",
+        "at",
+        "by",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "has",
+        "have",
+        "had",
+        "will",
+        "would",
+        "could",
+        "should",
+        "after",
+        "before",
+        "over",
+        "under",
+        "into",
+        "about",
+        "it",
+        "its",
+        "their",
+        "they",
+        "you",
+        "your",
+        "we",
+        "our",
+        "us",
+        "he",
+        "she",
+        "his",
+        "her",
+        "this",
+        "that",
+        "these",
+        "those",
+        "says",
+        "say",
+        "said",
+        "news",
+        "live",
+        "update",
+        "updates",
+    }
+
+    raw = re.findall(r"[a-z0-9]+", (text or "").lower())
+    out: list[str] = []
+    for w in raw:
+        if len(w) < 3:
+            continue
+        if w in stop:
+            continue
+        out.append(w)
+    return out
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    """Simple similarity score between token sets."""
+
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
+    """
+    Find the top-k widely-reported topics across all sources.
+
+    "Widely reported" is approximated as: clusters that are reported by the
+    largest number of distinct sources.
+
+    This is heuristic and intentionally simple: it clusters headlines by token
+    overlap (Jaccard similarity). It's not perfect, but works surprisingly well
+    for "big stories" that many outlets cover on the same day.
+    """
+
+    # Keep a larger pool (not only the first item) so we can capture more overlap.
+    pool: list[Headline] = []
+    for h in items:
+        if not h.title:
+            continue
+        pool.append(h)
+
+    # Greedy clustering in original order (which is already grouped by source).
+    clusters: list[dict] = []
+    for h in pool:
+        toks = set(_tokenize_for_topic(h.title))
+        if len(toks) < 2:
+            continue
+
+        best_idx = None
+        best_sim = 0.0
+        for i, c in enumerate(clusters):
+            sim = _jaccard(toks, c["centroid"])
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = i
+
+        # Only merge when the overlap is meaningful.
+        if best_idx is not None and best_sim >= 0.35 and len(toks & clusters[best_idx]["centroid"]) >= 2:
+            clusters[best_idx]["items"].append(h)
+            clusters[best_idx]["centroid"] |= toks
+            clusters[best_idx]["sources"].add(h.source)
+        else:
+            clusters.append({"items": [h], "centroid": set(toks), "sources": {h.source}})
+
+    # Score clusters by number of distinct sources (then by item count).
+    clusters.sort(key=lambda c: (len(c["sources"]), len(c["items"])), reverse=True)
+    # We'll select the top-k topics *after* expansion across sources, because
+    # expansion changes which tokens dominate a topic and helps avoid duplicates.
+
+    def short_title_for(cluster_items: list[Headline]) -> str:
+        # Use the most common tokens as a compact label.
+        counts: dict[str, int] = {}
+        for it in cluster_items:
+            for t in set(_tokenize_for_topic(it.title)):
+                counts[t] = counts.get(t, 0) + 1
+        common = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:3]
+        if common:
+            return " • ".join(w.upper() if len(w) <= 4 else w.title() for w, _ in common)
+        # Fallback: shorten the first title.
+        first = cluster_items[0].title.strip()
+        return (first[:57] + "…") if len(first) > 58 else first
+
+    def expand_cluster_across_sources(cluster: dict) -> list[Headline]:
+        """
+        After we have a topic cluster, make sure we include as many sources as possible.
+
+        Some outlets use different wording (e.g. "former FBI director" vs a surname),
+        which can cause them to miss the initial clustering threshold. Here we:
+        - derive a small set of "key tokens" for the topic
+        - for each source, pick the best-matching headline among that source's items
+        """
+
+        # Key tokens = the most frequent tokens in the cluster.
+        counts: dict[str, int] = {}
+        for it in cluster["items"]:
+            for t in set(_tokenize_for_topic(it.title)):
+                counts[t] = counts.get(t, 0) + 1
+        key_tokens = [w for w, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:6]]
+        key_set = set(key_tokens)
+
+        # Group pool by source so we can scan each source's headlines.
+        pool_by_source: dict[str, list[Headline]] = {}
+        for h in pool:
+            pool_by_source.setdefault(h.source, []).append(h)
+
+        def score(it: Headline) -> int:
+            toks = set(_tokenize_for_topic(it.title))
+            # Weight: direct key token hits matter most.
+            hits = len(toks & key_set)
+            overlap = len(toks & cluster["centroid"])
+            return hits * 3 + overlap
+
+        picked: dict[str, Headline] = {}
+        # Start with items already in the cluster.
+        for it in cluster["items"]:
+            picked.setdefault(it.source, it)
+
+        # Expand: pick best item per missing source if it matches meaningfully.
+        for spec in _feed_specs():
+            src = spec.source
+            if src in picked:
+                continue
+            candidates = pool_by_source.get(src) or []
+            if not candidates:
+                continue
+            best = max(candidates, key=score)
+            # Require at least one key token hit OR two centroid overlaps.
+            toks = set(_tokenize_for_topic(best.title))
+            hits = len(toks & key_set)
+            cent = len(toks & cluster["centroid"])
+            # Stricter matching to avoid unrelated headlines sneaking in:
+            # - Either 2+ key token hits (strong)
+            # - Or a decent centroid similarity with at least 1 key token
+            # - Or 3+ centroid overlaps (fallback)
+            if (hits >= 2) or (_jaccard(toks, cluster["centroid"]) >= 0.22 and hits >= 1) or (cent >= 3):
+                picked[src] = best
+
+        # Return in the canonical source order.
+        return [picked[s.source] for s in _feed_specs() if s.source in picked]
+
+    def signature_for_items(cluster_items: list[Headline]) -> frozenset[str]:
+        counts: dict[str, int] = {}
+        for it in cluster_items:
+            for t in set(_tokenize_for_topic(it.title)):
+                counts[t] = counts.get(t, 0) + 1
+        top_tokens = [w for w, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:5]]
+        return frozenset(top_tokens)
+
+    chosen: list[TopTopic] = []
+    chosen_sigs: set[frozenset[str]] = set()
+    chosen_token_sets: list[set[str]] = []
+
+    for c in clusters:
+        if len(chosen) >= max(0, k):
+            break
+
+        ordered = expand_cluster_across_sources(c)
+        if len({h.source for h in ordered}) < 3:
+            # Not widely reported enough; skip.
+            continue
+
+        sig = signature_for_items(ordered)
+        if sig and sig in chosen_sigs:
+            continue
+
+        tok_set = set(sig)
+        too_close = any(_jaccard(tok_set, s) >= 0.45 for s in chosen_token_sets if s)
+        if too_close:
+            continue
+
+        chosen.append(TopTopic(title=short_title_for(ordered), items=ordered))
+        if sig:
+            chosen_sigs.add(sig)
+            chosen_token_sets.append(set(sig))
+
+    return chosen
+
+
 @dataclass
 class _MetaCache:
     """
@@ -1838,6 +2101,45 @@ def _render_html(
         )
 
     rows_html = "\n".join(row_parts)
+
+    # "Top News" view: the two most widely reported topics across all sources.
+    # These panels render as their own sections and are shown when the user
+    # clicks the "Top News" pill.
+    top_topics = _compute_top_topics(cards, k=2)
+    top_parts: list[str] = []
+    for topic in top_topics:
+        items_html: list[str] = []
+        for it in topic.items:
+            has_img = bool(it.image_path) and (it.source not in _TEXT_ONLY_SOURCES)
+            img = f'<div class="tmedia"><img class="tthumb" src="{esc(it.image_path)}" alt=""/></div>' if has_img else ""
+            items_html.append(
+                textwrap.dedent(
+                    f"""
+                    <a class="topicItem{' noMedia' if not has_img else ''}" href="{esc(it.link)}" target="_blank" rel="noopener noreferrer">
+                      {img}
+                      <div class="tmeta">
+                        <div class="ttitle">{esc(it.title)}</div>
+                        <div class="tsource"><strong>{esc(it.source)}</strong></div>
+                      </div>
+                    </a>
+                    """
+                ).strip()
+            )
+
+        top_parts.append(
+            textwrap.dedent(
+                f"""
+                <section class="topicPanel" data-region="Top">
+                  <div class="topicHeader">{esc(topic.title)}</div>
+                  <div class="topicItems">
+                    {'\n'.join(items_html)}
+                  </div>
+                </section>
+                """
+            ).strip()
+        )
+
+    top_news_html = "\n".join(top_parts)
     built_str = built_at.strftime("%Y-%m-%d %H:%M")
     # Example: "Sunday, April 26 2026"
     date_str = f"{built_at.strftime('%A')}, {built_at.strftime('%B')} {built_at.day} {built_at.year}"
@@ -2085,6 +2387,87 @@ def _render_html(
                 gap: 14px;
               }}
 
+              /* Top News (topic clusters) */
+              .topicPanel {{
+                border-radius: 18px;
+                border: 1px solid var(--border);
+                background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.04));
+                box-shadow: var(--shadow);
+                padding: 14px;
+                display: grid;
+                gap: 12px;
+              }}
+
+              .topicHeader {{
+                font-size: 16px;
+                font-weight: 750;
+                letter-spacing: 0.2px;
+                color: rgba(255,255,255,0.92);
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+              }}
+
+              .topicItems {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 10px;
+                width: 100%;
+              }}
+
+              @media (max-width: 900px) {{
+                .topicItems {{ grid-template-columns: 1fr; }}
+              }}
+
+              .topicItem {{
+                display: grid;
+                grid-template-columns: 84px 1fr;
+                gap: 10px;
+                align-items: stretch;
+                text-decoration: none;
+                color: inherit;
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,0.16);
+                background: rgba(0,0,0,0.18);
+                overflow: hidden;
+              }}
+
+              .topicItem.noMedia {{
+                grid-template-columns: 1fr;
+              }}
+
+              .tmedia {{
+                background: rgba(0,0,0,0.22);
+              }}
+
+              .tthumb {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: block;
+              }}
+
+              .tmeta {{
+                padding: 10px 10px 10px 0;
+                display: grid;
+                gap: 6px;
+                align-content: start;
+              }}
+
+              .ttitle {{
+                font-size: 13px;
+                line-height: 1.25;
+                display: -webkit-box;
+                -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+              }}
+
+              .tsource {{
+                font-size: 12px;
+                color: rgba(255,255,255,0.82);
+              }}
+
               /* Each source section is: banner (left) + cards (right) */
               .row {{
                 display: grid;
@@ -2120,6 +2503,11 @@ def _render_html(
                 grid-auto-flow: dense;
               }}
 
+              /* Wide screens: show 5 items even though we fetch 6 (mobile uses all 6). */
+              .rowCards > a.card:nth-child(6) {{
+                display: none;
+              }}
+
               @media (max-width: 1100px) {{
                 .row {{ grid-template-columns: 34px 1fr; }}
                 .rowCards {{ grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); }}
@@ -2130,6 +2518,7 @@ def _render_html(
                 .row {{ grid-template-columns: 32px 1fr; padding: 10px; border-radius: 16px; }}
                 .row::before {{ border-radius: 16px; }}
                 .rowCards {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }}
+                .rowCards > a.card:nth-child(6) {{ display: block; }}
 
                 /* Drop subheader for height (and to match the previous mobile layout). */
                 .summary {{ display: none !important; }}
@@ -2352,6 +2741,19 @@ def _render_html(
                 <div class="headerLeft">
                   <h1>Goetz&#x27;s Daily News <span class="date">{html.escape(date_str)}</span></h1>
                   <div class="regionBar" role="group" aria-label="Select news region">
+                    <button class="regionBtn" type="button" data-region="Top" aria-pressed="false">
+                      <span class="flag" aria-hidden="true">
+                        <!-- globe icon -->
+                        <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="16" height="12" fill="#0B0F17"/>
+                          <circle cx="8" cy="6" r="4.6" fill="#2563EB"/>
+                          <path d="M6.1 4.6c.8-1 2.7-1.3 3.7-.6.7.5.6 1.3.1 1.8-.6.6-1.6.8-2.2.6-.6-.2-1.1.1-1.4-.4-.3-.4-.3-.8-.2-1.4z" fill="#22C55E"/>
+                          <path d="M7.6 2.0c.8.4 1.3 1.7 1.2 2.8-.1 1.2-.6 2.2-1.2 2.2-.6 0-1.1-1-1.2-2.2-.1-1.1.4-2.4 1.2-2.8z" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="0.7"/>
+                          <path d="M3.4 6h9.2" stroke="rgba(255,255,255,0.45)" stroke-width="0.7"/>
+                        </svg>
+                      </span>
+                      <span>Top News</span>
+                    </button>
                     <button class="regionBtn" type="button" data-region="UK" aria-pressed="false">
                       <span class="flag" aria-hidden="true">
                         <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
@@ -2454,6 +2856,7 @@ def _render_html(
                 </div>
               </header>
               <main class="grid">
+                {top_news_html}
                 {rows_html}
               </main>
             </div>
@@ -2464,7 +2867,7 @@ def _render_html(
               // we can fetch /api/news and refresh the visible cards without
               // re-running build.py.
               (function () {{
-                // Region filter (UK / DE / EU / Int'l / US / PGH).
+                // Region filter (Top / UK / DE / EU / Int'l / US / PGH).
                 (function () {{
                   const KEY = "newsOfTheDay.region";
                   const buttons = Array.from(document.querySelectorAll(".regionBtn"));
@@ -2473,14 +2876,17 @@ def _render_html(
                     for (const btn of buttons) {{
                       btn.setAttribute("aria-pressed", btn.dataset.region === region ? "true" : "false");
                     }}
-                    document.querySelectorAll("section.row").forEach((row) => {{
-                      const r = row.getAttribute("data-region");
-                      row.style.display = (r === region) ? "" : "none";
+                    // Show/hide ONLY the content sections inside <main>
+                    // (topic panels + normal source rows). Do NOT touch the header pills,
+                    // which also use data-region.
+                    document.querySelectorAll("main [data-region]").forEach((el) => {{
+                      const r = el.getAttribute("data-region");
+                      el.style.display = (r === region) ? "" : "none";
                     }});
                   }}
 
                   const saved = localStorage.getItem(KEY);
-                  const initial = saved || "Int'l";
+                  const initial = saved || "Top";
                   apply(initial);
 
                   for (const btn of buttons) {{
