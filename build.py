@@ -20,6 +20,7 @@ import html
 import json
 import os
 import re
+import shutil
 import sys
 import textwrap
 import time
@@ -1654,18 +1655,29 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
     Resolve a logo/icon image for each news source for the left banner.
 
     Priority:
-    1) Files you place locally (no download):
-       - dist/static/logos/<name>.{png,svg,webp,jpg,jpeg,ico}
+    1) Files you place in the *repo* (tracked in git; no download):
+       - static/logos/<name>.{png,svg,webp,jpg,jpeg,ico}
+       - static/icons/<name>.{...}   (optional; same idea)
+       These are copied into dist/static/logos/ so GitHub Pages always has them.
+    2) Files already present in the build output (no download):
+       - dist/static/logos/<name>.{...}
        - dist/static/icons/<name>.{...}   (legacy / favicon cache)
-    2) If nothing is found locally, fall back to downloading a favicon from the
+    3) If nothing is found locally, fall back to downloading a favicon from the
        site's homepage (best-effort).
 
-    Put your logos under dist/static/logos/ using the slug below, e.g.:
+    Put your logos under static/logos/ using the slug below, e.g.:
       the-economist.png
       the-guardian.svg
 
     Returns a mapping: source name -> relative path under dist/ (for HTML).
     """
+
+    # "static/" here refers to a *tracked* folder in the git repo next to build.py.
+    # Users can drop their preferred icons into static/logos and commit them, and
+    # the build will copy them into dist/ so the published site always uses them.
+    project_dir = Path(__file__).resolve().parent
+    project_logos_dir = project_dir / "static" / "logos"
+    project_icons_dir = project_dir / "static" / "icons"
 
     logos_dir = dist_dir / "static" / "logos"
     logos_dir.mkdir(parents=True, exist_ok=True)
@@ -1734,7 +1746,10 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
     }
 
     def _find_local_file(slug: str) -> Optional[Path]:
-        for base in (logos_dir, icons_dir):
+        # Search order matters:
+        # - repo static/ (tracked) first
+        # - then dist/ (already-built artifacts)
+        for base in (project_logos_dir, project_icons_dir, logos_dir, icons_dir):
             for ext in exts:
                 p = base / f"{slug}{ext}"
                 if p.exists() and p.stat().st_size > 0:
@@ -1756,8 +1771,23 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
                 break
 
         if found is not None:
-            rel = found.relative_to(dist_dir)
-            out[source] = rel.as_posix()
+            # If the icon lives in the repo (static/...), copy it into dist/static/logos/
+            # so it becomes part of the published Pages artifact.
+            try:
+                rel_to_project = found.relative_to(project_dir)
+            except ValueError:
+                rel_to_project = None
+
+            if rel_to_project is not None and rel_to_project.parts and rel_to_project.parts[0] == "static":
+                # Keep the exact filename (it already uses the correct slug/alias).
+                dest = logos_dir / found.name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(found, dest)
+                out[source] = f"static/logos/{dest.name}"
+            else:
+                # Already in dist/; just reference it.
+                rel = found.relative_to(dist_dir)
+                out[source] = rel.as_posix()
             continue
 
         # Fallback: download favicon into icons/ (only when no local asset).
