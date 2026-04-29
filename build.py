@@ -2193,7 +2193,7 @@ def _render_html(
             <meta name="viewport" content="width=device-width, initial-scale=1" />
             <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
             <link rel="alternate icon" href="static/favicon.svg" type="image/svg+xml" />
-            <title>Goetz&#x27;s Daily News</title>
+            <title>Göetz&#x27; Daily News</title>
             <style>
               :root {{
                 --bg: #0b0f17;
@@ -2244,7 +2244,7 @@ def _render_html(
 
               h1 {{
                 margin: 0;
-                font-size: 22px;
+                font-size: 28px;
                 letter-spacing: 0.2px;
                 white-space: nowrap;
               }}
@@ -2761,7 +2761,7 @@ def _render_html(
             <div class="wrap">
               <header>
                 <div class="headerLeft">
-                  <h1>Goetz&#x27;s Daily News <span class="date">{html.escape(date_str)}</span></h1>
+                  <h1>Göetz&#x27; Daily News <span class="date">{html.escape(date_str)}</span></h1>
                   <div class="regionBar" role="group" aria-label="Select news region">
                     <button class="regionBtn" type="button" data-region="Top" aria-pressed="false">
                       <span class="flag" aria-hidden="true">
