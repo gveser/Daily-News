@@ -2107,11 +2107,14 @@ def _render_html(
     # clicks the "Top News" pill.
     top_topics = _compute_top_topics(cards, k=2)
     top_parts: list[str] = []
-    for topic in top_topics:
+    for topic_idx, topic in enumerate(top_topics):
         items_html: list[str] = []
         for it in topic.items:
             has_img = bool(it.image_path) and (it.source not in _TEXT_ONLY_SOURCES)
             img = f'<div class="tmedia"><img class="tthumb" src="{esc(it.image_path)}" alt=""/></div>' if has_img else ""
+            # Show the feed-provided subheader/summary in Top News cards when available.
+            # Keep it short via CSS line-clamp so panel heights remain balanced.
+            summary_html = f'<div class="tsummary">{esc(it.summary)}</div>' if it.summary else ""
             items_html.append(
                 textwrap.dedent(
                     f"""
@@ -2119,6 +2122,7 @@ def _render_html(
                       {img}
                       <div class="tmeta">
                         <div class="ttitle">{esc(it.title)}</div>
+                        {summary_html}
                         <div class="tsource"><strong>{esc(it.source)}</strong></div>
                       </div>
                     </a>
@@ -2128,10 +2132,11 @@ def _render_html(
 
         # Join outside the f-string: f-string `{...}` parts cannot contain `\n` literals.
         items_block = "\n".join(items_html)
+        panel_class = "topicPanel topicPanelAlt" if topic_idx == 1 else "topicPanel"
         top_parts.append(
             textwrap.dedent(
                 f"""
-                <section class="topicPanel" data-region="Top">
+                <section class="{panel_class}" data-region="Top">
                   <div class="topicHeader">{esc(topic.title)}</div>
                   <div class="topicItems">
                     {items_block}
@@ -2400,6 +2405,11 @@ def _render_html(
                 gap: 12px;
               }}
 
+              /* Give the second Top News panel a distinct tint. */
+              .topicPanelAlt {{
+                background: linear-gradient(180deg, rgba(120,170,255,0.22), rgba(120,170,255,0.08));
+              }}
+
               .topicHeader {{
                 font-size: 16px;
                 font-weight: 750;
@@ -2461,6 +2471,16 @@ def _render_html(
                 line-height: 1.25;
                 display: -webkit-box;
                 -webkit-line-clamp: 3;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+              }}
+
+              .tsummary {{
+                font-size: 12px;
+                line-height: 1.3;
+                color: rgba(255,255,255,0.74);
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
                 -webkit-box-orient: vertical;
                 overflow: hidden;
               }}
