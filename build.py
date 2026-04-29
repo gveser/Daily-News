@@ -2126,13 +2126,15 @@ def _render_html(
                 ).strip()
             )
 
+        # Join outside the f-string: f-string `{...}` parts cannot contain `\n` literals.
+        items_block = "\n".join(items_html)
         top_parts.append(
             textwrap.dedent(
                 f"""
                 <section class="topicPanel" data-region="Top">
                   <div class="topicHeader">{esc(topic.title)}</div>
                   <div class="topicItems">
-                    {'\n'.join(items_html)}
+                    {items_block}
                   </div>
                 </section>
                 """
