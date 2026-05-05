@@ -1686,6 +1686,19 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
 
     exts = (".png", ".svg", ".webp", ".jpg", ".jpeg", ".ico")
 
+    # Make builds deterministic:
+    # `dist/` is a build output and may contain stale files from a prior run.
+    # If we re-use old downloaded favicons blindly, we can keep broken/incorrect
+    # extensions around forever. Clearing only the downloaded icon cache makes
+    # the build repeatable while still allowing user-provided repo icons
+    # (`static/logos/*`) to take precedence.
+    for p in icons_dir.iterdir():
+        if p.is_file() and p.suffix.lower() in exts:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
     # Some sites return tiny/blank favicons (e.g. a 1×1 pixel). If a *downloaded*
     # favicon is suspiciously small, we treat it as invalid and try a different fallback.
     #
@@ -1733,6 +1746,14 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
     # BBC World Service's default page often redirects into BBC Sounds and can
     # produce a non-representative (or tiny) icon. We instead pin to BBC's main favicon.
     _FORCED_ICON_URL: dict[str, str] = {
+        # UK sources:
+        # - Some publishers block simple HTTP clients (403 HTML) or serve favicons that
+        #   look odd when scaled down. Pinning to a small, widely-available favicon endpoint
+        #   keeps the left banner icons consistent.
+        "The Economist": "https://www.google.com/s2/favicons?domain=economist.com&sz=128",
+        "The Guardian": "https://www.google.com/s2/favicons?domain=theguardian.com&sz=128",
+        "BBC News": "https://www.google.com/s2/favicons?domain=bbc.com&sz=128",
+        "Financial Times": "https://www.google.com/s2/favicons?domain=ft.com&sz=128",
         "BBC World Service": "https://www.bbc.com/favicon.ico",
         "Deutsche Welle": "https://www.dw.com/favicon.ico",
         "RNZ": "https://www.rnz.de/favicon.ico",
@@ -1743,6 +1764,16 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         "USA Today": "https://www.usatoday.com/favicon.ico",
         "Vox": "https://www.vox.com/static-assets/icons/favicon.ico",
         "Axios": "https://www.axios.com/favicon.ico",
+    }
+
+    # Sources where we prefer the downloaded/pinned icon over any repo-local
+    # `static/logos/*` file.
+    #
+    # Why:
+    # - Some checked-in logos are intentionally simplified placeholders.
+    # - For a few publishers, a favicon endpoint produces a clearer mark at 24×24.
+    _DOWNLOAD_FIRST_ICON_SOURCES: set[str] = {
+        "Financial Times",
     }
 
     def _find_local_file(slug: str) -> Optional[Path]:
@@ -1765,10 +1796,11 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         candidates = [slug] + _ALIASES.get(source, [])
 
         found: Optional[Path] = None
-        for cand in candidates:
-            found = _find_local_file(cand)
-            if found:
-                break
+        if source not in _DOWNLOAD_FIRST_ICON_SOURCES:
+            for cand in candidates:
+                found = _find_local_file(cand)
+                if found:
+                    break
 
         if found is not None:
             # If the icon lives in the repo (static/...), copy it into dist/static/logos/
@@ -1790,8 +1822,12 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
                 out[source] = rel.as_posix()
             continue
 
-        # Fallback: download favicon into icons/ (only when no local asset).
-        out_path = icons_dir / f"{slug}.ico"
+        # Fallback: download a site icon into icons/ (only when no local asset).
+        #
+        # Many publishers do *not* serve a Windows `.ico` file at their icon URL.
+        # They may serve PNG or SVG. If we always save as `.ico`, we can end up with
+        # a valid PNG/SVG file that has the wrong extension, which some browsers
+        # refuse to render in an <img>.
         icon_url: Optional[str] = None
         if source in _FORCED_ICON_URL:
             icon_url = _FORCED_ICON_URL[source]
@@ -1813,19 +1849,112 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         if not icon_url:
             icon_url = _normalize_url(homepage, "/favicon.ico")
 
-        try:
+        def _sniff_icon_ext(content: bytes, content_type: Optional[str], url_hint: str) -> str:
+            ct = (content_type or "").lower()
+            hint = (url_hint or "").lower()
+
+            # SVG (text) — allow for XML prolog or whitespace.
+            stripped = content.lstrip()
+            if "image/svg" in ct or hint.endswith(".svg") or stripped.startswith(b"<svg") or stripped.startswith(b"<?xml"):
+                return ".svg"
+
+            # PNG
+            if "image/png" in ct or hint.endswith(".png") or content.startswith(b"\x89PNG\r\n\x1a\n"):
+                return ".png"
+
+            # ICO
+            if (
+                "image/x-icon" in ct
+                or "image/vnd.microsoft.icon" in ct
+                or hint.endswith(".ico")
+                or content.startswith(b"\x00\x00\x01\x00")
+            ):
+                return ".ico"
+
+            # WebP
+            if "image/webp" in ct or hint.endswith(".webp") or (content.startswith(b"RIFF") and b"WEBP" in content[:16]):
+                return ".webp"
+
+            # JPEG
+            if "image/jpeg" in ct or hint.endswith(".jpg") or hint.endswith(".jpeg") or content.startswith(b"\xff\xd8\xff"):
+                return ".jpg"
+
+            # Default to `.ico` as a broad fallback.
+            return ".ico"
+
+        def _looks_like_html(content: bytes, content_type: Optional[str]) -> bool:
+            ct = (content_type or "").lower()
+            if "text/html" in ct:
+                return True
+            head = (content or b"").lstrip()[:64].lower()
+            return head.startswith(b"<!doctype html") or head.startswith(b"<html")
+
+        def _domain_from_homepage(home: str) -> Optional[str]:
+            try:
+                from urllib.parse import urlparse
+
+                u = urlparse(home)
+                host = (u.hostname or "").lower()
+                return host or None
+            except Exception:
+                return None
+
+        def _fallback_icon_urls(home: str) -> list[str]:
+            """
+            When a publisher blocks direct favicon fetches (403 HTML) or returns an HTML
+            error page, fall back to small third-party favicon endpoints.
+
+            These are best-effort and meant for personal/homepage use only.
+            """
+            dom = _domain_from_homepage(home)
+            if not dom:
+                return []
+            return [
+                f"https://www.google.com/s2/favicons?domain={dom}&sz=128",
+                f"https://icons.duckduckgo.com/ip3/{dom}.ico",
+            ]
+
+        def _try_download_icon(url: str) -> tuple[bytes, str]:
             r = requests.get(
-                icon_url,
+                url,
                 headers={"User-Agent": "NewsOfTheDay/1.0 (+local script; personal use)"},
                 timeout=20,
             )
             r.raise_for_status()
-            with open(out_path, "wb") as f:
-                f.write(r.content)
-            # If the downloaded icon is too tiny, treat it as invalid so we don't
-            # “successfully” cache a blank 1×1 pixel.
-            if out_path.exists() and out_path.stat().st_size >= min_downloaded_icon_bytes:
-                out[source] = f"static/icons/{out_path.name}"
+            content = r.content or b""
+            return content, (r.headers.get("Content-Type") or "")
+
+        try:
+            tried: list[str] = []
+            content, ctype = b"", ""
+            last_err: Optional[Exception] = None
+
+            for candidate in [icon_url, *_fallback_icon_urls(homepage)]:
+                if not candidate or candidate in tried:
+                    continue
+                tried.append(candidate)
+                try:
+                    content, ctype = _try_download_icon(candidate)
+                    if _looks_like_html(content, ctype):
+                        continue
+                    ext = _sniff_icon_ext(content, ctype, candidate)
+                    out_path = icons_dir / f"{slug}{ext}"
+                    with open(out_path, "wb") as f:
+                        f.write(content)
+
+                    ok_size = out_path.suffix.lower() == ".svg" or (
+                        out_path.exists() and out_path.stat().st_size >= min_downloaded_icon_bytes
+                    )
+                    if ok_size:
+                        out[source] = f"static/icons/{out_path.name}"
+                        break
+                except Exception as e:
+                    last_err = e
+                    continue
+            else:
+                # If everything failed, swallow quietly (missing icon is non-fatal).
+                if last_err:
+                    raise last_err
         except Exception:
             continue
 
@@ -2243,6 +2372,23 @@ def _render_html(
             """
         ).strip()
 
+    # Favicons / site icons:
+    # Only reference files that exist in the repo's tracked `static/` folder,
+    # because `build.py` copies those into `dist/static/` during the build.
+    project_dir = Path(__file__).resolve().parent
+    static_dir = project_dir / "static"
+    favicon_links: list[str] = []
+    if (static_dir / "favicon.svg").exists():
+        favicon_links.append('<link rel="icon" href="static/favicon.svg" type="image/svg+xml" />')
+    if (static_dir / "favicon.png").exists():
+        favicon_links.append('<link rel="icon" href="static/favicon.png" type="image/png" />')
+    if (static_dir / "favicon.ico").exists():
+        favicon_links.append('<link rel="icon" href="static/favicon.ico" sizes="any" />')
+    if (static_dir / "apple-touch-icon.png").exists():
+        favicon_links.append('<link rel="apple-touch-icon" href="static/apple-touch-icon.png" />')
+
+    favicon_links_html = "\n            ".join(favicon_links)
+
     return textwrap.dedent(
         f"""
         <!doctype html>
@@ -2250,11 +2396,7 @@ def _render_html(
           <head>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
-            <!-- Favicon: include .ico fallback for broad browser support. -->
-            <link rel="icon" href="static/favicon.ico" sizes="any" />
-            <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
-            <link rel="alternate icon" href="static/favicon.svg" type="image/svg+xml" />
-            <link rel="apple-touch-icon" href="static/apple-touch-icon.png" />
+            {favicon_links_html}
             <title>Daily World News</title>
             <style>
               :root {{
