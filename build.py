@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
+from urllib.parse import quote, urlparse
 
 import feedparser
 import requests
@@ -85,6 +86,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "The Guardian": "UK",
     "BBC News": "UK",
     "Financial Times": "UK",
+    "Reuters": "UK",
     # Germany
     "Der Spiegel": "DE",
     "Deutsche Welle": "DE",
@@ -97,6 +99,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "El País": "EU",
     "France 24": "EU",
     "EUobserver": "EU",
+    "Agence France-Presse": "EU",
     # United States
     "Associated Press": "US",
     "The New York Times": "US",
@@ -104,6 +107,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "The Wall Street Journal": "US",
     "USA Today": "US",
     "Vox": "US",
+    "Politico": "US",
     "Axios": "US",
     # Pittsburgh (PGH)
     "WESA": "PGH",
@@ -112,6 +116,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "Pgh PublicSource": "PGH",
     "Trib|Live": "PGH",
     # International
+    "Times of India": "Int'l",
     "The Straits Times": "Int'l",
     "South China Morning Post": "Int'l",
     "The Jerusalem Post": "Int'l",
@@ -405,6 +410,10 @@ class _MetaCache:
 
     path: Path
     ttl_s: int = 60 * 60 * 6  # 6 hours
+    # Failed metadata lookups are cached as `{image_url: null, description: null}`.
+    # Keeping those "negative" entries for hours can hide fixes when a publisher briefly
+    # rate-limits automated requests, so we expire negatives faster than successes.
+    negative_ttl_s: int = 60 * 30  # 30 minutes
     _data: dict[str, dict] = None  # set in load()
 
     def load(self) -> None:
@@ -433,7 +442,10 @@ class _MetaCache:
         ts = rec.get("ts")
         if not isinstance(ts, (int, float)):
             return None
-        if (time.time() - float(ts)) > self.ttl_s:
+        age = time.time() - float(ts)
+        neg = (rec.get("image_url") is None) and (rec.get("description") is None)
+        ttl = self.negative_ttl_s if neg else self.ttl_s
+        if age > ttl:
             return None
         return (rec.get("image_url") or None, rec.get("description") or None)
 
@@ -468,34 +480,244 @@ def _new_http_session() -> requests.Session:
     return s
 
 
-def _resolve_news_link(session: requests.Session, url: str, timeout_s: int = 12) -> str:
+def _browser_like_headers() -> dict[str, str]:
     """
-    Resolve aggregator links to their final destination URL (best-effort).
+    Headers that look like a normal desktop browser.
 
-    This helps when a feed item points to an aggregator wrapper (e.g. Google News),
-    which often prevents proper og:image extraction or image downloads.
+    Why we need this:
+    - Many publishers block non-browser user agents for RSS/HTML.
+    - Google News wrapper pages embed signing parameters we need to decode real URLs.
+    """
+
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://news.google.com/",
+    }
+
+
+def _google_news_token_from_url(url: str) -> Optional[str]:
+    """
+    Extract the opaque Google News token from a wrapper URL.
+
+    Typical shapes:
+    - https://news.google.com/rss/articles/<token>?...
+    - https://news.google.com/articles/<token>?...
     """
 
     try:
-        r = session.get(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0 Safari/537.36"
-                ),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=timeout_s,
-            allow_redirects=True,
-        )
-        r.raise_for_status()
-        final_url = str(r.url)
-        return final_url or url
+        host = (urlparse(url).hostname or "").lower()
+        if host not in {"news.google.com", "www.news.google.com"}:
+            return None
+        parts = [p for p in urlparse(url).path.split("/") if p]
+        if len(parts) < 2:
+            return None
+        if parts[-2] not in {"articles", "rss"}:
+            # Still handle .../articles/<token> even if middle segment differs.
+            pass
+        return parts[-1] or None
     except Exception:
-        return url
+        return None
+
+
+def _decode_google_news_publishers_batch(
+    session: requests.Session,
+    articles: list[dict[str, str]],
+    timeout_s: int = 30,
+) -> dict[str, str]:
+    """
+    Turn Google News wrapper tokens into publisher URLs.
+
+    This uses Google's internal `batchexecute` endpoint with signing parameters that
+    are embedded in the HTML returned for each `/rss/articles/<token>` page.
+
+    Returns:
+      token -> publisher_url
+    """
+
+    if not articles:
+        return {}
+
+    articles_reqs: list[list[str]] = []
+    for art in articles:
+        articles_reqs.append(
+            [
+                "Fbv4je",
+                (
+                    '["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],'
+                    '"X","X",1,[1,1,1],1,1,null,0,0,null,0],"'
+                    f'{art["gn_art_id"]}'
+                    f'",{art["timestamp"]},"'
+                    f'{art["signature"]}'
+                    '"]'
+                ),
+            ]
+        )
+
+    payload = "f.req=" + quote(json.dumps([articles_reqs]))
+    r = session.post(
+        "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            **_browser_like_headers(),
+        },
+        data=payload,
+        timeout=timeout_s,
+    )
+    r.raise_for_status()
+
+    parts = r.text.split("\n\n")
+    if len(parts) < 2:
+        return {}
+
+    middle = json.loads(parts[1])
+    publisher_urls: list[str] = []
+    if isinstance(middle, list):
+        for row in middle:
+            # Typical successful rows look like:
+            # ["wrb.fr","Fbv4je","[\"garturlres\",\"https://publisher/article\",1]", ...]
+            if not isinstance(row, list) or len(row) < 3:
+                continue
+            if row[0] != "wrb.fr":
+                continue
+            payload = row[2]
+            if not isinstance(payload, str):
+                continue
+            try:
+                inner = json.loads(payload)
+            except Exception:
+                continue
+            if not isinstance(inner, list) or len(inner) < 2:
+                continue
+            if inner[0] != "garturlres":
+                continue
+            publisher_url = inner[1]
+            if isinstance(publisher_url, str) and publisher_url.startswith("http"):
+                publisher_urls.append(publisher_url)
+
+    out: dict[str, str] = {}
+    for art, publisher_url in zip(articles, publisher_urls):
+        out[str(art["gn_art_id"])] = publisher_url
+    return out
+
+
+def _homepage_registered_domain(source: str) -> Optional[str]:
+    """
+    Return a coarse registered-domain string for a source's configured homepage.
+
+    Example:
+    - https://www.reuters.com/ -> "reuters.com"
+    - https://nextpittsburgh.com/ -> "nextpittsburgh.com"
+
+    We use this as a lightweight sanity check after decoding Google News wrapper URLs.
+    """
+
+    home = ""
+    for spec in _feed_specs():
+        if spec.source == source:
+            home = spec.homepage_url
+            break
+
+    if not home:
+        return None
+
+    host = (urlparse(home).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def _url_matches_source_homepage(source: str, url: str) -> bool:
+    """
+    Return True if `url` looks like it belongs to the publisher implied by our FeedSpec homepage.
+
+    This is intentionally conservative: we only *reject* obvious mismatches when Google News
+    decoding lands on a different publisher domain than the feed constraint suggests.
+    """
+
+    allowed = _homepage_registered_domain(source)
+    if not allowed:
+        return True
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+
+    if host.startswith("www."):
+        host = host[4:]
+
+    return host == allowed or host.endswith("." + allowed)
+
+
+def _rewrite_google_news_links(session: requests.Session, headlines: list[Headline]) -> list[Headline]:
+    """
+    Replace `news.google.com/rss/articles/...` links with direct publisher URLs.
+
+    Without this, og:image enrichment often only sees generic Google-branded images.
+    """
+
+    # Collect unique tokens once (many headlines may share the same token).
+    seen_tokens: set[str] = set()
+    articles_meta: list[dict[str, str]] = []
+
+    for h in headlines:
+        if "news.google.com/rss/articles/" not in h.link:
+            continue
+        token = _google_news_token_from_url(h.link)
+        if not token:
+            continue
+        if token in seen_tokens:
+            continue
+
+        seen_tokens.add(token)
+        try:
+            r = session.get(h.link, headers=_browser_like_headers(), timeout=25, allow_redirects=True)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+            div = soup.select_one("c-wiz > div")
+            if div is None:
+                continue
+            sig = div.get("data-n-a-sg")
+            ts = div.get("data-n-a-ts")
+            if not sig or not ts:
+                continue
+            articles_meta.append(
+                {"gn_art_id": token, "signature": str(sig), "timestamp": str(ts)}
+            )
+        except Exception:
+            continue
+
+        # Small pacing helps avoid Google rate limits when decoding many items.
+        time.sleep(0.15)
+
+    decoded_by_token: dict[str, str] = {}
+    # Batch decode (single POST) in stable order.
+    if articles_meta:
+        try:
+            decoded_by_token = _decode_google_news_publishers_batch(session, articles_meta)
+        except Exception:
+            decoded_by_token = {}
+
+    # Apply replacements.
+    updated: list[Headline] = []
+    for h in headlines:
+        if "news.google.com/rss/articles/" not in h.link:
+            updated.append(h)
+            continue
+        token = _google_news_token_from_url(h.link)
+        pub = decoded_by_token.get(token or "") if token else None
+        if pub and _url_matches_source_homepage(h.source, pub):
+            updated.append(Headline(**{**h.__dict__, "link": pub}))
+        else:
+            updated.append(h)
+
+    return updated
 
 
 def _feed_specs() -> list[FeedSpec]:
@@ -607,10 +829,31 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://www.ft.com/rss/home"],
             use_homepage_scrape=False,
         ),
+        # UK: Reuters
+        #
+        # Note: Reuters' historical `feeds.reuters.com` endpoints are not always reliable
+        # for scripted fetches. A Google News RSS search constrained to reuters.com is
+        # very stable and still yields normal article links.
+        FeedSpec(
+            source="Reuters",
+            homepage_url="https://www.reuters.com/",
+            urls=[
+                "https://news.google.com/rss/search?q=site%3Areuters.com+when%3A7d&hl=en-GB&gl=GB&ceid=GB%3Aen"
+            ],
+            use_homepage_scrape=False,
+        ),
         FeedSpec(
             source="Vox",
             homepage_url="https://www.vox.com/",
             urls=["https://www.vox.com/rss/index.xml"],
+            use_homepage_scrape=False,
+        ),
+        # US: Politico (keep near other US digital-native sources)
+        FeedSpec(
+            source="Politico",
+            homepage_url="https://www.politico.com/",
+            # `rss.politico.com` endpoints are more automation-friendly than some `www.politico.com/rss/*` URLs.
+            urls=["https://rss.politico.com/politics-news.xml"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -666,6 +909,13 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://www.jpost.com/rss/rssfeedsfrontpage.aspx"],
             use_homepage_scrape=False,
         ),
+        # Int'l: Times of India
+        FeedSpec(
+            source="Times of India",
+            homepage_url="https://timesofindia.indiatimes.com/",
+            urls=["https://timesofindia.indiatimes.com/rssfeedstopstories.cms"],
+            use_homepage_scrape=False,
+        ),
         FeedSpec(
             source="The New York Times",
             homepage_url="https://www.nytimes.com/",
@@ -712,12 +962,26 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://euobserver.com/rss"],
             use_homepage_scrape=False,
         ),
+        # EU: Agence France-Presse (AFP)
+        #
+        # AFP's public website RSS endpoints are often category-specific; for a broad
+        # "wire service" row we use Google News RSS constrained to afp.com (similar to
+        # other sources where direct RSS is unreliable).
+        FeedSpec(
+            source="Agence France-Presse",
+            homepage_url="https://www.afp.com/",
+            urls=[
+                "https://news.google.com/rss/search?q=site%3Aafp.com+when%3A7d&hl=en&gl=FR&ceid=FR%3Aen",
+            ],
+            use_homepage_scrape=False,
+        ),
 
         # Pittsburgh local sources (PGH tab)
         FeedSpec(
             source="WESA",
             homepage_url="https://www.wesa.fm/",
-            # WESA does not publish a stable, public RSS endpoint; use Google News RSS.
+            # WESA exposes `index.rss`, but it is frequently empty (channel-only) while still returning HTTP 200.
+            # A constrained Google News RSS feed is the most reliable way to get timely headlines.
             urls=["https://news.google.com/rss/search?q=site%3Awesa.fm&hl=en-US&gl=US&ceid=US%3Aen"],
             use_homepage_scrape=False,
         ),
@@ -730,8 +994,12 @@ def _feed_specs() -> list[FeedSpec]:
         FeedSpec(
             source="Pgh City Paper",
             homepage_url="https://www.pghcitypaper.com/",
-            # Direct RSS endpoints frequently return 403 for scripted requests; use Google News RSS.
-            urls=["https://news.google.com/rss/search?q=site%3Apghcitypaper.com&hl=en-US&gl=US&ceid=US%3Aen"],
+            # Prefer the publisher RSS when it allows scripted clients (browser-like UA helps).
+            # Keep Google News RSS as a fallback if the direct feed is temporarily blocked.
+            urls=[
+                "https://www.pghcitypaper.com/feed/",
+                "https://news.google.com/rss/search?q=site%3Apghcitypaper.com&hl=en-US&gl=US&ceid=US%3Aen",
+            ],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -912,10 +1180,15 @@ def _fetch_feed(url: str, timeout_s: int = 20) -> feedparser.FeedParserDict:
     """
 
     headers = {
-        # A basic, honest user agent. Some sites reject the default Python UA.
-        "User-Agent": "NewsOfTheDay/1.0 (+local script; personal use)",
+        **_browser_like_headers(),
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        # RSS is still an HTTP resource; a Referer isn't required, but keeping it
+        # stable avoids some bot-management edge cases.
+        "Referer": "",
     }
+    # Blank Referer keys can confuse some servers; remove empty headers.
+    headers = {k: v for k, v in headers.items() if v != ""}
+
     resp = requests.get(url, headers=headers, timeout=timeout_s)
     resp.raise_for_status()
     return feedparser.parse(resp.content)
@@ -928,10 +1201,7 @@ def _fetch_html(url: str, timeout_s: int = 25) -> str:
     We keep headers similar to a normal browser to avoid simple bot blocks.
     """
 
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    headers = _browser_like_headers()
     r = requests.get(url, headers=headers, timeout=timeout_s)
     r.raise_for_status()
     return r.text
@@ -1283,6 +1553,13 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "The Jerusalem Post",
         "The New York Times",
         "The Washington Post",
+        # Pittsburgh locals:
+        # Several of these use Google News RSS wrappers or feeds without embedded media,
+        # so og:image extraction from the article page is the reliable path.
+        "WESA",
+        "NEXTpittsburgh",
+        "Pgh City Paper",
+        "Trib|Live",
         # New sources that often don't embed images in RSS:
         "RNZ",
         "EUobserver",
@@ -1297,6 +1574,10 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "Deutsche Welle": 6,
         "The Jerusalem Post": 6,
         "Al Jazeera": 6,
+        "WESA": 6,
+        "NEXTpittsburgh": 6,
+        "Pgh City Paper": 6,
+        "Trib|Live": 6,
         "RNZ": 6,
         "EUobserver": 6,
         "AllAfrica": 6,
@@ -1326,13 +1607,22 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         to_enrich.append(h)
 
     def enrich_one(h: Headline) -> Headline:
+        # Important: a headline can have a summary but still be missing an image
+        # (common for feeds that include descriptions but no media). In that case
+        # we still want to attempt og:image extraction.
         if h.image_url and h.summary:
             return h
+
+        # Some independent publishers aggressively rate-limit concurrent requests.
+        # A tiny per-fetch delay is usually enough to avoid HTTP 429 responses during builds.
+        if h.source in {"NEXTpittsburgh"}:
+            time.sleep(0.35)
+
         img, desc = _fetch_article_meta(session, cache, h.link, timeout_s=20)
         return Headline(**{**h.__dict__, "image_url": (h.image_url or img), "summary": (h.summary or desc)})
 
     enriched_map: dict[str, Headline] = {}
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {pool.submit(enrich_one, h): h for h in to_enrich}
         for fut in as_completed(futures):
             enriched = fut.result()
@@ -1419,8 +1709,20 @@ def _fetch_article_meta(
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        r = session.get(article_url, headers=headers, timeout=timeout_s, allow_redirects=True)
-        r.raise_for_status()
+
+        # Some publishers respond with HTTP 429 when many article pages are fetched in parallel.
+        # A couple quick retries with backoff usually succeeds without slowing the whole build much.
+        r = None
+        for attempt in range(4):
+            r = session.get(article_url, headers=headers, timeout=timeout_s, allow_redirects=True)
+            if r.status_code == 429:
+                time.sleep(0.35 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            break
+
+        if r is None:
+            raise RuntimeError("No response")
         final_url = str(r.url)
 
         # Avoid treating subscription redirects as valid article pages.
@@ -1734,6 +2036,10 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         "The Wall Street Journal": ["wsj", "wall-street-journal"],
         "BBC News": ["bbc"],
         "Associated Press": ["ap", "associated-press"],
+        "Reuters": ["reuters"],
+        "Politico": ["politico"],
+        "Times of India": ["times-of-india", "toi", "timesofindia"],
+        "Agence France-Presse": ["afp", "afp-com", "agence-france-presse"],
         "Deutsche Welle": ["dw", "deutsche-welle"],
         "Süddeutsche Zeitung": ["sz", "sueddeutsche", "sueddeutsche-zeitung", "sueddeutschezeitung"],
         "Tagesschau": ["tagesschau"],
@@ -1754,6 +2060,10 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         "The Guardian": "https://www.google.com/s2/favicons?domain=theguardian.com&sz=128",
         "BBC News": "https://www.google.com/s2/favicons?domain=bbc.com&sz=128",
         "Financial Times": "https://www.google.com/s2/favicons?domain=ft.com&sz=128",
+        "Reuters": "https://www.google.com/s2/favicons?domain=reuters.com&sz=128",
+        "Politico": "https://www.google.com/s2/favicons?domain=politico.com&sz=128",
+        "Times of India": "https://www.google.com/s2/favicons?domain=indiatimes.com&sz=128",
+        "Agence France-Presse": "https://www.google.com/s2/favicons?domain=afp.com&sz=128",
         "BBC World Service": "https://www.bbc.com/favicon.ico",
         "Deutsche Welle": "https://www.dw.com/favicon.ico",
         "RNZ": "https://www.rnz.de/favicon.ico",
@@ -2182,10 +2492,6 @@ def _collect_headlines() -> list[Headline]:
             image_url = _extract_image_url(entry)
             summary = _extract_entry_summary(entry)
 
-            # If the feed link is an aggregator wrapper, resolve to the real article.
-            if "news.google.com/rss/articles" in link:
-                link = _resolve_news_link(session, link)
-
             # Straits Times: their RSS does not include media tags at all, but the
             # article pages do include og:image, and they are fetchable (no CF block),
             # so we enrich missing images from the article HTML.
@@ -2196,6 +2502,14 @@ def _collect_headlines() -> list[Headline]:
 
         items = _dedupe_by_link(items)
         all_items.extend(_select_with_trump_cap(items, per_source_target, trump_cap=3))
+
+    # Google News RSS items often point at `news.google.com/rss/articles/...` wrappers.
+    # Those wrappers hide the publisher URL and commonly yield unusable/generic preview images.
+    # After we've assembled all rows, rewrite those wrappers to publisher URLs in one pass.
+    try:
+        all_items = _rewrite_google_news_links(session, all_items)
+    except Exception as e:
+        print(f"[WARN] Google News link rewriting failed: {e}")
 
     # If one feed had too few items, we may have <16. That's okay.
     return all_items
@@ -2859,13 +3173,17 @@ def _render_html(
               .row[data-source="France 24"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.30), rgba(255,255,255,0.06)); }}
               .row[data-source="South China Morning Post"]::before {{ background: linear-gradient(180deg, rgba(20, 184, 166, 0.28), rgba(255,255,255,0.06)); }}
               .row[data-source="The Jerusalem Post"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.28), rgba(255,255,255,0.06)); }}
+              .row[data-source="Times of India"]::before {{ background: linear-gradient(180deg, rgba(245, 158, 11, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="AllAfrica"]::before {{ background: linear-gradient(180deg, rgba(22, 163, 74, 0.24), rgba(255,255,255,0.06)); }}
               .row[data-source="EUobserver"]::before {{ background: linear-gradient(180deg, rgba(37, 99, 235, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Agence France-Presse"]::before {{ background: linear-gradient(180deg, rgba(56, 189, 248, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="BBC World Service"]::before {{ background: linear-gradient(180deg, rgba(148, 163, 184, 0.24), rgba(255,255,255,0.06)); }}
               .row[data-source="The Diplomat"]::before {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.24), rgba(255,255,255,0.06)); }}
               .row[data-source="Financial Times"]::before {{ background: linear-gradient(180deg, rgba(255, 59, 48, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Reuters"]::before {{ background: linear-gradient(180deg, rgba(248, 113, 113, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="USA Today"]::before {{ background: linear-gradient(180deg, rgba(14, 165, 233, 0.24), rgba(255,255,255,0.06)); }}
               .row[data-source="Vox"]::before {{ background: linear-gradient(180deg, rgba(251, 146, 60, 0.24), rgba(255,255,255,0.06)); }}
+              .row[data-source="Politico"]::before {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="Axios"]::before {{ background: linear-gradient(180deg, rgba(34, 197, 94, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="WESA"]::before {{ background: linear-gradient(180deg, rgba(236, 72, 153, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="NEXTpittsburgh"]::before {{ background: linear-gradient(180deg, rgba(168, 85, 247, 0.22), rgba(255,255,255,0.06)); }}
