@@ -2255,7 +2255,7 @@ def _render_html(
             <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
             <link rel="alternate icon" href="static/favicon.svg" type="image/svg+xml" />
             <link rel="apple-touch-icon" href="static/apple-touch-icon.png" />
-            <title>Götz&#x27; Daily News</title>
+            <title>Daily World News</title>
             <style>
               :root {{
                 --bg: #0b0f17;
@@ -2354,6 +2354,21 @@ def _render_html(
                 border-color: rgba(255,255,255,0.28);
                 background: rgba(255,255,255,0.12);
                 color: rgba(255,255,255,0.92);
+              }}
+
+              /*
+                Responsive behavior for the region selector buttons:
+                - On wide screens, the region code stays beside the flag (default inline-flex row).
+                - On narrow screens (when the overall layout starts to reflow),
+                  we stack the code under the flag for a cleaner, more compact pill.
+              */
+              @media (max-width: 560px) {{
+                .regionBtn {{
+                  flex-direction: column;
+                  align-items: center;
+                  gap: 4px;
+                  padding: 6px 8px;
+                }}
               }}
 
               .flag {{
@@ -2823,7 +2838,7 @@ def _render_html(
             <div class="wrap">
               <header>
                 <div class="headerLeft">
-                  <h1>Götz&#x27; Daily News <span class="date">{html.escape(date_str)}</span></h1>
+                  <h1>Daily World News <span class="date">{html.escape(date_str)}</span></h1>
                   <div class="regionBar" role="group" aria-label="Select news region">
                     <button class="regionBtn" type="button" data-region="Top" aria-pressed="false">
                       <span class="flag" aria-hidden="true">
@@ -2943,6 +2958,111 @@ def _render_html(
                 {top_news_html}
                 {rows_html}
               </main>
+
+              <!-- Bottom region selector (mirrors the top row) -->
+              <div class="regionBar" role="group" aria-label="Select news region (bottom)" style="margin-top: 16px;">
+                <button class="regionBtn" type="button" data-region="Top" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <!-- globe icon -->
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#0B0F17"/>
+                      <circle cx="8" cy="6" r="4.6" fill="#2563EB"/>
+                      <path d="M6.1 4.6c.8-1 2.7-1.3 3.7-.6.7.5.6 1.3.1 1.8-.6.6-1.6.8-2.2.6-.6-.2-1.1.1-1.4-.4-.3-.4-.3-.8-.2-1.4z" fill="#22C55E"/>
+                      <path d="M7.6 2.0c.8.4 1.3 1.7 1.2 2.8-.1 1.2-.6 2.2-1.2 2.2-.6 0-1.1-1-1.2-2.2-.1-1.1.4-2.4 1.2-2.8z" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="0.7"/>
+                      <path d="M3.4 6h9.2" stroke="rgba(255,255,255,0.45)" stroke-width="0.7"/>
+                    </svg>
+                  </span>
+                  <span>Top News</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="UK" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#0A2A66"/>
+                      <path d="M0 0 L2.2 0 L16 8.6 L16 12 L13.8 12 L0 3.4 Z" fill="#FFFFFF" opacity="0.95"/>
+                      <path d="M16 0 L13.8 0 L0 8.6 L0 12 L2.2 12 L16 3.4 Z" fill="#FFFFFF" opacity="0.95"/>
+                      <path d="M0 0 L1.3 0 L16 9.2 L16 12 L14.7 12 L0 2.8 Z" fill="#C8102E" opacity="0.95"/>
+                      <path d="M16 0 L14.7 0 L0 9.2 L0 12 L1.3 12 L16 2.8 Z" fill="#C8102E" opacity="0.95"/>
+                      <rect x="6.2" width="3.6" height="12" fill="#FFFFFF"/>
+                      <rect y="4.2" width="16" height="3.6" fill="#FFFFFF"/>
+                      <rect x="6.8" width="2.4" height="12" fill="#C8102E"/>
+                      <rect y="4.8" width="16" height="2.4" fill="#C8102E"/>
+                    </svg>
+                  </span>
+                  <span>UK</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="DE" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="4" y="0" fill="#000000"/>
+                      <rect width="16" height="4" y="4" fill="#DD0000"/>
+                      <rect width="16" height="4" y="8" fill="#FFCE00"/>
+                    </svg>
+                  </span>
+                  <span>DE</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="EU" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#003399"/>
+                      <circle cx="8" cy="6" r="2.3" fill="none" stroke="#FFCC00" stroke-width="0.9" opacity="0.95"/>
+                    </svg>
+                  </span>
+                  <span>EU</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="Int'l" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#5DADE2"/>
+                      <circle cx="8" cy="6" r="2.6" fill="none" stroke="#FFFFFF" stroke-width="0.9" opacity="0.95"/>
+                      <path d="M6.3 6h3.4" stroke="#FFFFFF" stroke-width="0.8" opacity="0.95"/>
+                      <path d="M8 3.6v4.8" stroke="#FFFFFF" stroke-width="0.6" opacity="0.7"/>
+                    </svg>
+                  </span>
+                  <span>Int'l</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="US" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#FFFFFF"/>
+                      <g fill="#B22234">
+                        <rect y="0" width="16" height="1"/>
+                        <rect y="2" width="16" height="1"/>
+                        <rect y="4" width="16" height="1"/>
+                        <rect y="6" width="16" height="1"/>
+                        <rect y="8" width="16" height="1"/>
+                        <rect y="10" width="16" height="1"/>
+                      </g>
+                      <rect width="7" height="6" fill="#3C3B6E"/>
+                      <g fill="#FFFFFF" opacity="0.9">
+                        <circle cx="1.1" cy="1.0" r="0.25"/><circle cx="2.3" cy="1.0" r="0.25"/><circle cx="3.5" cy="1.0" r="0.25"/><circle cx="4.7" cy="1.0" r="0.25"/><circle cx="5.9" cy="1.0" r="0.25"/>
+                        <circle cx="1.7" cy="2.0" r="0.25"/><circle cx="2.9" cy="2.0" r="0.25"/><circle cx="4.1" cy="2.0" r="0.25"/><circle cx="5.3" cy="2.0" r="0.25"/>
+                        <circle cx="1.1" cy="3.0" r="0.25"/><circle cx="2.3" cy="3.0" r="0.25"/><circle cx="3.5" cy="3.0" r="0.25"/><circle cx="4.7" cy="3.0" r="0.25"/><circle cx="5.9" cy="3.0" r="0.25"/>
+                        <circle cx="1.7" cy="4.0" r="0.25"/><circle cx="2.9" cy="4.0" r="0.25"/><circle cx="4.1" cy="4.0" r="0.25"/><circle cx="5.3" cy="4.0" r="0.25"/>
+                        <circle cx="1.1" cy="5.0" r="0.25"/><circle cx="2.3" cy="5.0" r="0.25"/><circle cx="3.5" cy="5.0" r="0.25"/><circle cx="4.7" cy="5.0" r="0.25"/><circle cx="5.9" cy="5.0" r="0.25"/>
+                      </g>
+                    </svg>
+                  </span>
+                  <span>US</span>
+                </button>
+                <button class="regionBtn" type="button" data-region="PGH" aria-pressed="false">
+                  <span class="flag" aria-hidden="true">
+                    <svg viewBox="0 0 16 12" xmlns="http://www.w3.org/2000/svg">
+                      <rect width="16" height="12" fill="#111827"/>
+                      <rect y="9.2" width="16" height="2.8" fill="#0B1220"/>
+                      <g fill="#94A3B8" opacity="0.95">
+                        <rect x="1.2" y="5.2" width="2.0" height="4.0" rx="0.2"/>
+                        <rect x="3.6" y="3.8" width="2.2" height="5.4" rx="0.2"/>
+                        <rect x="6.2" y="4.6" width="1.8" height="4.6" rx="0.2"/>
+                        <rect x="8.4" y="2.8" width="2.4" height="6.4" rx="0.2"/>
+                        <rect x="11.2" y="4.2" width="1.6" height="5.0" rx="0.2"/>
+                        <rect x="13.2" y="5.6" width="1.6" height="3.6" rx="0.2"/>
+                      </g>
+                      <path d="M0 9.2 C 4 8.4, 7 10.0, 10 9.2 C 12.2 8.6, 13.4 8.8, 16 9.2 L16 12 L0 12 Z" fill="#0F172A" opacity="0.9"/>
+                    </svg>
+                  </span>
+                  <span>PGH</span>
+                </button>
+              </div>
             </div>
 
             <script>
