@@ -1832,6 +1832,35 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
     return out
 
 
+def _copy_site_static_assets(project_dir: Path, dist_dir: Path) -> None:
+    """
+    Copy user-provided, git-tracked site assets into dist/ so GitHub Pages serves them.
+
+    Why this exists:
+    - dist/ is intentionally ignored by git (it's a build output).
+    - GitHub Actions builds the site and publishes the dist/ artifact.
+    - Therefore any asset you want everyone to see must be committed *somewhere else*
+      (tracked) and then copied into dist/ during the build.
+
+    Place files under:
+      static/favicon.svg            (works in modern browsers)
+      static/favicon.ico            (recommended fallback for broad compatibility)
+      static/favicon.png            (optional)
+      static/apple-touch-icon.png   (optional)
+
+    This function copies any that exist into dist/static/.
+    """
+
+    src_static = project_dir / "static"
+    dst_static = dist_dir / "static"
+    dst_static.mkdir(parents=True, exist_ok=True)
+
+    for name in ("favicon.ico", "favicon.png", "favicon.svg", "apple-touch-icon.png"):
+        src = src_static / name
+        if src.exists() and src.is_file() and src.stat().st_size > 0:
+            shutil.copy2(src, dst_static / name)
+
+
 def _take_latest(headlines: Iterable[Headline], n: int) -> list[Headline]:
     """Return the first n items from an iterable."""
 
@@ -2221,8 +2250,11 @@ def _render_html(
           <head>
             <meta charset="utf-8" />
             <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <!-- Favicon: include .ico fallback for broad browser support. -->
+            <link rel="icon" href="static/favicon.ico" sizes="any" />
             <link rel="icon" href="static/favicon.svg" type="image/svg+xml" />
             <link rel="alternate icon" href="static/favicon.svg" type="image/svg+xml" />
+            <link rel="apple-touch-icon" href="static/apple-touch-icon.png" />
             <title>Götz&#x27; Daily News</title>
             <style>
               :root {{
@@ -3194,6 +3226,9 @@ def main() -> int:
 
     dist_dir.mkdir(parents=True, exist_ok=True)
     images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy git-tracked static assets (favicons, touch icon, etc.) into dist/.
+    _copy_site_static_assets(project_dir, dist_dir)
 
     headlines = _collect_headlines()
     loc = _default_location()
