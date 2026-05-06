@@ -73,9 +73,7 @@ class FeedSpec:
 
 # Sources the user wants to render as text-only (no images shown).
 _TEXT_ONLY_SOURCES = {
-    "The Economist",
-    "The Jerusalem Post",
-    "The Washington Post",
+    # (Empty for now) — user prefers images whenever possible.
 }
 
 # Region filter categories for the top buttons.
@@ -109,6 +107,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "Vox": "US",
     "Politico": "US",
     "Axios": "US",
+    "The Atlantic": "US",
     # Pittsburgh (PGH)
     "WESA": "PGH",
     "NEXTpittsburgh": "PGH",
@@ -151,6 +150,14 @@ def _tokenize_for_topic(text: str) -> list[str]:
     - drop very short tokens
     """
 
+    # Stopwords:
+    # We filter common "filler" words so they don't dominate Top News keywords.
+    # This list includes:
+    # - English fillers (the, is, with, ...)
+    # - Common German article/preposition fillers (der, die, das, auf, ...)
+    # - Common French article/preposition fillers (le, la, les, de, des, ...)
+    #
+    # This is intentionally a small, pragmatic list (not a full NLP stopword corpus).
     stop = {
         "the",
         "a",
@@ -211,6 +218,71 @@ def _tokenize_for_topic(text: str) -> list[str]:
         "live",
         "update",
         "updates",
+        "how",
+        "still",
+
+        # German
+        "der",
+        "die",
+        "das",
+        "den",
+        "dem",
+        "des",
+        "ein",
+        "eine",
+        "einer",
+        "eines",
+        "einem",
+        "einen",
+        "und",
+        "oder",
+        "aber",
+        "auf",
+        "im",
+        "in",
+        "am",
+        "an",
+        "aus",
+        "bei",
+        "mit",
+        "von",
+        "vom",
+        "zum",
+        "zur",
+        "über",
+        "unter",
+        "nach",
+        "vor",
+        "für",
+        "ist",
+        "sind",
+        "war",
+        "waren",
+
+        # French
+        "le",
+        "la",
+        "les",
+        "un",
+        "une",
+        "des",
+        "du",
+        "de",
+        "d",
+        "et",
+        "ou",
+        "mais",
+        "en",
+        "dans",
+        "sur",
+        "avec",
+        "par",
+        "pour",
+        "sans",
+        "aux",
+        "au",
+        "est",
+        "sont",
     }
 
     raw = re.findall(r"[a-z0-9]+", (text or "").lower())
@@ -294,6 +366,21 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
         first = cluster_items[0].title.strip()
         return (first[:57] + "…") if len(first) > 58 else first
 
+    def keywords_for(cluster_items: list[Headline]) -> list[str]:
+        """
+        Return the three topic keywords used in the Top News label.
+
+        We keep this separate so we can de-duplicate topics using the same
+        keyword logic the user sees in the UI.
+        """
+
+        counts: dict[str, int] = {}
+        for it in cluster_items:
+            for t in set(_tokenize_for_topic(it.title)):
+                counts[t] = counts.get(t, 0) + 1
+        common = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:3]
+        return [w for w, _ in common]
+
     def expand_cluster_across_sources(cluster: dict) -> list[Headline]:
         """
         After we have a topic cluster, make sure we include as many sources as possible.
@@ -363,6 +450,7 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
     chosen: list[TopTopic] = []
     chosen_sigs: set[frozenset[str]] = set()
     chosen_token_sets: list[set[str]] = []
+    chosen_keywords: list[set[str]] = []
 
     for c in clusters:
         if len(chosen) >= max(0, k):
@@ -382,10 +470,63 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
         if too_close:
             continue
 
+        # User requested: if 2 of the 3 keywords are identical, group the topics into one.
+        # We enforce this by skipping any candidate topic whose visible keywords overlap an
+        # already-chosen topic by >=2.
+        kw_set = set(keywords_for(ordered))
+        if len(kw_set) >= 2 and any(len(kw_set & prev) >= 2 for prev in chosen_keywords):
+            continue
+
         chosen.append(TopTopic(title=short_title_for(ordered), items=ordered))
         if sig:
             chosen_sigs.add(sig)
             chosen_token_sets.append(set(sig))
+            chosen_keywords.append(kw_set)
+
+    # Ordering (user requested):
+    # 1) Sort topics by number of related sources (descending).
+    # 2) If topics share at least one of their visible keywords, keep them adjacent.
+    #
+    # We treat "share one topic" as: their 3-keyword sets overlap by >= 1 keyword.
+    # We build connected components on that overlap graph, then order components by
+    # their strongest topic (most sources), and order topics within each component
+    # by source count.
+    if len(chosen) >= 2:
+        source_counts = [len({h.source for h in t.items}) for t in chosen]
+
+        parent = list(range(len(chosen)))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a: int, b: int) -> None:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[rb] = ra
+
+        for i in range(len(chosen)):
+            for j in range(i + 1, len(chosen)):
+                if chosen_keywords[i] and chosen_keywords[j] and (chosen_keywords[i] & chosen_keywords[j]):
+                    union(i, j)
+
+        comps: dict[int, list[int]] = {}
+        for idx in range(len(chosen)):
+            comps.setdefault(find(idx), []).append(idx)
+
+        # Sort components and topics inside them.
+        ordered_indices: list[int] = []
+        for _, members in sorted(
+            comps.items(),
+            key=lambda kv: max(source_counts[i] for i in kv[1]),
+            reverse=True,
+        ):
+            members_sorted = sorted(members, key=lambda i: source_counts[i], reverse=True)
+            ordered_indices.extend(members_sorted)
+
+        chosen = [chosen[i] for i in ordered_indices]
 
     return chosen
 
@@ -413,7 +554,10 @@ class _MetaCache:
     # Failed metadata lookups are cached as `{image_url: null, description: null}`.
     # Keeping those "negative" entries for hours can hide fixes when a publisher briefly
     # rate-limits automated requests, so we expire negatives faster than successes.
-    negative_ttl_s: int = 60 * 30  # 30 minutes
+    # Keep negatives very short: many sites intermittently rate-limit or temporarily
+    # omit metadata, and a long-lived negative cache makes the page look "broken"
+    # for a long time even after the next successful fetch.
+    negative_ttl_s: int = 60 * 2  # 2 minutes
     _data: dict[str, dict] = None  # set in load()
 
     def load(self) -> None:
@@ -600,6 +744,12 @@ def _decode_google_news_publishers_batch(
             if isinstance(publisher_url, str) and publisher_url.startswith("http"):
                 publisher_urls.append(publisher_url)
 
+    # IMPORTANT: If Google returns fewer decoded URLs than we requested (e.g. due to
+    # rate limiting), blindly zipping would shift mappings and attach the wrong link
+    # to the wrong headline (which shows up as "wrong photo in the wrong box").
+    if len(publisher_urls) != len(articles):
+        return {}
+
     out: dict[str, str] = {}
     for art, publisher_url in zip(articles, publisher_urls):
         out[str(art["gn_art_id"])] = publisher_url
@@ -677,8 +827,17 @@ def _rewrite_google_news_links(session: requests.Session, headlines: list[Headli
 
         seen_tokens.add(token)
         try:
-            r = session.get(h.link, headers=_browser_like_headers(), timeout=25, allow_redirects=True)
-            r.raise_for_status()
+            # Google can rate-limit bursts of wrapper fetches. Use a small retry loop.
+            r = None
+            for attempt in range(4):
+                r = session.get(h.link, headers=_browser_like_headers(), timeout=25, allow_redirects=True)
+                if r.status_code == 429:
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                break
+            if r is None:
+                continue
             soup = BeautifulSoup(r.text, "html.parser")
             div = soup.select_one("c-wiz > div")
             if div is None:
@@ -694,15 +853,17 @@ def _rewrite_google_news_links(session: requests.Session, headlines: list[Headli
             continue
 
         # Small pacing helps avoid Google rate limits when decoding many items.
-        time.sleep(0.15)
+        time.sleep(0.25)
 
     decoded_by_token: dict[str, str] = {}
-    # Batch decode (single POST) in stable order.
-    if articles_meta:
+    # Decode one-by-one. It's slower than batching, but avoids occasional ordering
+    # mismatches that can attach the wrong publisher URL to the wrong headline.
+    for art in articles_meta:
         try:
-            decoded_by_token = _decode_google_news_publishers_batch(session, articles_meta)
+            one = _decode_google_news_publishers_batch(session, [art])
+            decoded_by_token.update(one)
         except Exception:
-            decoded_by_token = {}
+            continue
 
     # Apply replacements.
     updated: list[Headline] = []
@@ -740,13 +901,10 @@ def _feed_specs() -> list[FeedSpec]:
         FeedSpec(
             source="The Economist",
             homepage_url="https://www.economist.com/",
-            urls=[
-                "https://www.economist.com/latest/rss.xml",
-                "https://www.economist.com/international/rss.xml",
-                "https://www.economist.com/united-states/rss.xml",
-                "https://www.economist.com/business/rss.xml",
-                "https://www.economist.com/world/rss.xml",
-            ],
+            # The Economist blocks our homepage scraping (403) frequently.
+            # A constrained Google News RSS feed is more reliable in automated builds,
+            # and we replace Google placeholder images during enrichment.
+            urls=["https://news.google.com/rss/search?q=site%3Aeconomist.com&hl=en-US&gl=US&ceid=US%3Aen"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -877,11 +1035,21 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
+            source="The Atlantic",
+            homepage_url="https://www.theatlantic.com/",
+            # The Atlantic's reliable RSS endpoint.
+            urls=["https://www.theatlantic.com/feed/all/"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
             source="South China Morning Post",
             homepage_url="https://www.scmp.com/",
             urls=["https://www.scmp.com/rss"],
             use_homepage_scrape=True,
-            homepage_link_allow_regex=r"https://www\.scmp\.com/.+",
+            # SCMP's homepage contains many persistent "section" links (e.g. People & Culture)
+            # that are not actual story pages. Their story URLs reliably include `/article/<id>`,
+            # so we constrain scraping to those to avoid pulling static nav headlines.
+            homepage_link_allow_regex=r"https://www\.scmp\.com/.+/article/\d+",
         ),
         FeedSpec(
             source="The Jerusalem Post",
@@ -1188,9 +1356,24 @@ def _fetch_feed(url: str, timeout_s: int = 20) -> feedparser.FeedParserDict:
     # Blank Referer keys can confuse some servers; remove empty headers.
     headers = {k: v for k, v in headers.items() if v != ""}
 
-    resp = requests.get(url, headers=headers, timeout=timeout_s)
-    resp.raise_for_status()
-    return feedparser.parse(resp.content)
+    # Some hosts (including local publishers) will intermittently rate-limit RSS (HTTP 429).
+    # A small retry with backoff avoids dropping an entire row for a transient limit.
+    last_exc: Optional[Exception] = None
+    for attempt in range(4):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout_s)
+            if resp.status_code == 429:
+                time.sleep(0.6 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            return feedparser.parse(resp.content)
+        except Exception as e:
+            last_exc = e
+            time.sleep(0.3 * (attempt + 1))
+            continue
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def _fetch_html(url: str, timeout_s: int = 25) -> str:
@@ -1547,6 +1730,7 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
     """
 
     enrich_sources = {
+        "The Economist",
         "Deutsche Welle",
         "Al Jazeera",
         "The Jerusalem Post",
@@ -1564,6 +1748,8 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "EUobserver",
         "AllAfrica",
         "South China Morning Post",
+        "USA Today",
+        "Agence France-Presse",
         # Reuters feed items often lack media tags; og:image on article pages is reliable.
         "Reuters",
     }
@@ -1572,6 +1758,7 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
     per_source_budget = {
         "The Washington Post": 2,  # WaPo is slow; keep it very small
         "The New York Times": 4,
+        "The Economist": 4,
         "Deutsche Welle": 6,
         "The Jerusalem Post": 6,
         "Al Jazeera": 6,
@@ -1583,6 +1770,8 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "EUobserver": 6,
         "AllAfrica": 6,
         "South China Morning Post": 6,
+        "USA Today": 6,
+        "Agence France-Presse": 6,
         "Reuters": 6,
     }
     used: dict[str, int] = {}
@@ -1612,7 +1801,21 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         # Important: a headline can have a summary but still be missing an image
         # (common for feeds that include descriptions but no media). In that case
         # we still want to attempt og:image extraction.
-        if h.image_url and h.summary:
+        #
+        # Also important: Google News wrapper pages often produce a generic Google
+        # og:image thumbnail (lh3.googleusercontent.com). Those are not useful and
+        # should be replaced with the publisher's og:image when possible.
+        img_url_str = str(h.image_url or "")
+        is_google_placeholder_img = (
+            bool(h.image_url)
+            and (
+                ("lh3.googleusercontent.com" in img_url_str)
+                or ("googleusercontent.com" in img_url_str)
+                or ("gstatic.com/images/branding" in img_url_str)
+            )
+        )
+
+        if h.image_url and h.summary and not is_google_placeholder_img:
             return h
 
         # Some independent publishers aggressively rate-limit concurrent requests.
@@ -1620,8 +1823,16 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         if h.source in {"NEXTpittsburgh"}:
             time.sleep(0.35)
 
-        img, desc = _fetch_article_meta(session, cache, h.link, timeout_s=20)
-        return Headline(**{**h.__dict__, "image_url": (h.image_url or img), "summary": (h.summary or desc)})
+        # A few sources are notably slower.
+        timeout = 35 if h.source in {"The Washington Post"} else 20
+        img, desc = _fetch_article_meta(session, cache, h.link, timeout_s=timeout)
+
+        # If the current image is a Google placeholder, prefer the publisher image we just fetched.
+        new_img = h.image_url
+        if img and (not h.image_url or is_google_placeholder_img):
+            new_img = img
+
+        return Headline(**{**h.__dict__, "image_url": new_img, "summary": (h.summary or desc)})
 
     enriched_map: dict[str, Headline] = {}
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -1699,7 +1910,13 @@ def _fetch_article_meta(
 
     cached = cache.get(article_url)
     if cached is not None:
-        return cached
+        # AFP pages often have a description but no og:image, even though a usable
+        # inline <img> exists. If we cached (None, description) previously, allow
+        # re-fetch so our HTML-image fallback can populate the image.
+        if (cached[0] is None) and ("afp.com/" in article_url):
+            cached = None
+        else:
+            return cached
 
     try:
         headers = {
@@ -1746,6 +1963,72 @@ def _fetch_article_meta(
             tag = soup.find("meta", attrs=attrs)
             if tag and tag.get("content"):
                 img = str(tag.get("content")).strip() or None
+                break
+
+        # JSON-LD fallback (common on modern sites, and sometimes present even when og:image isn't).
+        if not img:
+            for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+                try:
+                    if not script.string:
+                        continue
+                    data = json.loads(script.string)
+                except Exception:
+                    continue
+
+                # JSON-LD can be:
+                # - a dict
+                # - a list of dicts
+                # - a dict with "@graph": [...]
+                candidates: list[object] = []
+                if isinstance(data, list):
+                    candidates = data
+                elif isinstance(data, dict):
+                    if isinstance(data.get("@graph"), list):
+                        candidates = list(data.get("@graph") or [])
+                    else:
+                        candidates = [data]
+
+                def extract_image(obj: object) -> Optional[str]:
+                    if not isinstance(obj, dict):
+                        return None
+                    im = obj.get("image")
+                    if isinstance(im, str):
+                        return im
+                    if isinstance(im, list) and im and isinstance(im[0], str):
+                        return im[0]
+                    if isinstance(im, dict):
+                        # Common schema: {"url": "..."} or {"@type":"ImageObject","url":"..."}
+                        u = im.get("url")
+                        if isinstance(u, str):
+                            return u
+                        if isinstance(u, list) and u and isinstance(u[0], str):
+                            return u[0]
+                    return None
+
+                for obj in candidates:
+                    found = extract_image(obj)
+                    if found and isinstance(found, str) and found.startswith(("http://", "https://")):
+                        img = found
+                        break
+                if img:
+                    break
+
+        # Some publishers (notably afp.com nodes) do not include og:image but do include
+        # a representative image in the HTML. As a fallback, pick the first non-trivial <img>.
+        if not img:
+            for im in soup.find_all("img"):
+                src = im.get("src") or im.get("data-src") or ""
+                src = str(src).strip()
+                if not src or src.startswith("data:"):
+                    continue
+                if not (src.startswith("http://") or src.startswith("https://")):
+                    continue
+                low = src.lower()
+                if any(x in low for x in ("logo", ".svg", "doubleclick.net", "ct?id=bwnews")):
+                    continue
+                if not re.search(r"\.(jpg|jpeg|png|webp)(?:\\?|$)", low):
+                    continue
+                img = src
                 break
 
         # Description
@@ -2076,6 +2359,7 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
         "USA Today": "https://www.usatoday.com/favicon.ico",
         "Vox": "https://www.vox.com/static-assets/icons/favicon.ico",
         "Axios": "https://www.axios.com/favicon.ico",
+        "The Atlantic": "https://www.theatlantic.com/favicon.ico",
     }
 
     # Sources where we prefer the downloaded/pinned icon over any repo-local
@@ -3901,6 +4185,24 @@ def main() -> int:
             else:
                 hydrated.append(h)
             continue
+
+        # If the "image" is just a generic Google placeholder (common on Google News RSS),
+        # do not download/use it. It's better to show no image (or a source placeholder)
+        # than a misleading Google thumbnail.
+        img_url_str = str(h.image_url or "")
+        is_google_placeholder_img = (
+            ("lh3.googleusercontent.com" in img_url_str)
+            or ("googleusercontent.com" in img_url_str)
+            or ("gstatic.com/images/branding" in img_url_str)
+        )
+        if is_google_placeholder_img:
+            ph = placeholder_paths.get(h.source)
+            if ph:
+                hydrated.append(Headline(**{**h.__dict__, "image_url": None, "image_path": ph}))
+            else:
+                hydrated.append(Headline(**{**h.__dict__, "image_url": None, "image_path": None}))
+            continue
+
         filename = _safe_filename_from_url(h.image_url)
         out_path = images_dir / filename
         ok = _download_image(h.image_url, out_path, referer=h.link)
