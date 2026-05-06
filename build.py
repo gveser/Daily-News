@@ -9,8 +9,9 @@ What this script does (high level):
 
 This keeps things simple:
 - No web server needed. Just open dist/index.html in your browser.
-- Feeds are fetched live each time you run the script.
-- Images are cached to avoid re-downloading on every run.
+- Feeds are fetched on each full build; ``python build.py --use-cache`` rebuilds HTML from
+  ``cache/build-cache.json`` (written after a successful full build) to skip network-heavy steps.
+- Article images are still stored under ``dist/``; the build cache only stores metadata/paths.
 """
 
 from __future__ import annotations
@@ -2132,6 +2133,182 @@ def _default_location() -> LocationSpec:
     return LocationSpec(name="Pittsburgh, PA", latitude=40.4406, longitude=-79.9959)
 
 
+def _meteoblue_week_url(latitude: float, longitude: float) -> str:
+    """
+    Build a MeteoBlue "week" forecast URL that actually resolves to the coordinates.
+
+    The simple query form (?lat=&lon=) is unreliable in practice (can ignore coords or
+    follow stale site state). MeteoBlue's stable pattern encodes lat/lon in the path,
+    e.g. ``40.441N79.996W0_UTC`` for Pittsburgh.
+    """
+
+    lat = float(latitude)
+    lon = float(longitude)
+    lat_part = f"{abs(lat):.3f}{'N' if lat >= 0 else 'S'}"
+    lon_part = f"{abs(lon):.3f}{'E' if lon >= 0 else 'W'}"
+    # ``0`` = elevation placeholder; ``UTC`` keeps the link generic without guessing IANA tz.
+    return f"https://www.meteoblue.com/en/weather/week/{lat_part}{lon_part}0_UTC"
+
+
+def _meteoblue_named_week_url(latitude: float, longitude: float, place_query: str) -> str:
+    """
+    Build a MeteoBlue week URL using their public location search, pinned to lat/lon.
+
+    Coordinate-only ``/week/{lat}{lon}...`` links often resolve to the wrong town name
+    on MeteoBlue's side. Their JSON search (same as the site search box) returns a
+    stable slug path like ``pittsburgh_united-states_5206379``. We pick the result
+    closest to our Open-Meteo coordinates so the page matches the widget.
+
+    Falls back to ``_meteoblue_week_url`` if search fails or nothing is close enough.
+    """
+
+    q = (place_query or "").strip()
+    if not q:
+        return _meteoblue_week_url(latitude, longitude)
+    try:
+        r = requests.get(
+            "https://www.meteoblue.com/en/server/search/query3",
+            params={"query": q},
+            headers={"User-Agent": "NewsOfTheDay/1.0 (+local script; personal use)"},
+            timeout=12,
+        )
+        r.raise_for_status()
+        data = r.json()
+        results = data.get("results") or []
+        latf = float(latitude)
+        lonf = float(longitude)
+        best: Optional[dict] = None
+        best_d = float("inf")
+        for item in results:
+            if item.get("lat") is None or item.get("lon") is None or not item.get("url"):
+                continue
+            dlat = float(item["lat"]) - latf
+            dlon = float(item["lon"]) - lonf
+            d = dlat * dlat + dlon * dlon
+            if d < best_d:
+                best_d = d
+                best = item
+        if best is None:
+            return _meteoblue_week_url(latitude, longitude)
+        # ~0.25° is roughly 25–30 km; beyond that, keep the coordinate URL instead.
+        if best_d > (0.25 * 0.25):
+            return _meteoblue_week_url(latitude, longitude)
+        return f"https://www.meteoblue.com/en/weather/week/{best['url']}"
+    except Exception:
+        return _meteoblue_week_url(latitude, longitude)
+
+
+# Written after each successful full build; consumed by ``python build.py --use-cache``.
+_BUILD_CACHE_VERSION = 1
+
+
+def _build_cache_path(project_dir: Path) -> Path:
+    return project_dir / "cache" / "build-cache.json"
+
+
+def _headline_to_cache_dict(h: Headline) -> dict:
+    return {
+        "source": h.source,
+        "title": h.title,
+        "link": h.link,
+        "summary": h.summary,
+        "image_url": h.image_url,
+        "image_path": h.image_path,
+    }
+
+
+def _headline_from_cache_dict(d: dict) -> Headline:
+    return Headline(
+        source=d["source"],
+        title=d["title"],
+        link=d["link"],
+        summary=d.get("summary"),
+        image_url=d.get("image_url"),
+        image_path=d.get("image_path"),
+    )
+
+
+def _weather_to_cache_dict(w: WeatherSummary) -> dict:
+    return {
+        "current_f": w.current_f,
+        "high_f": w.high_f,
+        "low_f": w.low_f,
+        "rain_probability_pct": w.rain_probability_pct,
+        "weather_code": w.weather_code,
+    }
+
+
+def _weather_from_cache_dict(d: dict) -> WeatherSummary:
+    return WeatherSummary(
+        current_f=float(d["current_f"]),
+        high_f=float(d["high_f"]),
+        low_f=float(d["low_f"]),
+        rain_probability_pct=d.get("rain_probability_pct"),
+        weather_code=d.get("weather_code"),
+    )
+
+
+def _save_build_cache(
+    project_dir: Path,
+    headlines: list[Headline],
+    weather: Optional[WeatherSummary],
+) -> None:
+    """Persist last full build so ``--use-cache`` can regenerate HTML quickly."""
+
+    path = _build_cache_path(project_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep a version number so we can change the JSON shape later and old files are ignored safely.
+    payload = {
+        "version": _BUILD_CACHE_VERSION,
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "headlines": [_headline_to_cache_dict(h) for h in headlines],
+        "weather": _weather_to_cache_dict(weather) if weather else None,
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_build_cache(project_dir: Path) -> Optional[tuple[list[Headline], Optional[WeatherSummary]]]:
+    """Return (headlines, weather) from the last successful full build, or None if missing/stale."""
+
+    path = _build_cache_path(project_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != _BUILD_CACHE_VERSION:
+            return None
+        raw_h = payload.get("headlines") or []
+        if not raw_h:
+            return None
+        headlines = [_headline_from_cache_dict(x) for x in raw_h]
+        wraw = payload.get("weather")
+        weather = _weather_from_cache_dict(wraw) if wraw else None
+        return (headlines, weather)
+    except Exception:
+        return None
+
+
+def _reconcile_cached_image_paths(dist_dir: Path, headlines: list[Headline]) -> list[Headline]:
+    """
+    Drop ``image_path`` when the file is missing (e.g. user cleared ``dist/`` but kept cache).
+
+    Keeps the page valid without re-downloading during a ``--use-cache`` run.
+    """
+
+    out: list[Headline] = []
+    for h in headlines:
+        ip = h.image_path
+        if ip:
+            rel = ip.replace("/", os.sep)
+            if not (dist_dir / rel).is_file():
+                ip = None
+        if ip != h.image_path:
+            out.append(Headline(**{**h.__dict__, "image_path": ip}))
+        else:
+            out.append(h)
+    return out
+
+
 def _weather_icon_svg(weather_code: Optional[int]) -> str:
     """
     Return a small line-icon SVG for a given Open-Meteo weather code.
@@ -2271,7 +2448,7 @@ def _download_image(url: str, out_path: Path, referer: Optional[str] = None, tim
         return False
 
 
-def _download_source_icons(dist_dir: Path) -> dict[str, str]:
+def _download_source_icons(dist_dir: Path, *, local_only: bool = False) -> dict[str, str]:
     """
     Resolve a logo/icon image for each news source for the left banner.
 
@@ -2291,6 +2468,10 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
       the-guardian.svg
 
     Returns a mapping: source name -> relative path under dist/ (for HTML).
+
+    Args:
+        local_only: If True, only reuse/copy icons already on disk (no HTTP). Used for
+            fast ``python build.py --use-cache`` rebuilds.
     """
 
     # "static/" here refers to a *tracked* folder in the git repo next to build.py.
@@ -2313,12 +2494,16 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
     # extensions around forever. Clearing only the downloaded icon cache makes
     # the build repeatable while still allowing user-provided repo icons
     # (`static/logos/*`) to take precedence.
-    for p in icons_dir.iterdir():
-        if p.is_file() and p.suffix.lower() in exts:
-            try:
-                p.unlink()
-            except OSError:
-                pass
+    #
+    # Fast ``--use-cache`` builds pass ``local_only=True`` so we neither wipe nor
+    # re-download banner icons.
+    if not local_only:
+        for p in icons_dir.iterdir():
+            if p.is_file() and p.suffix.lower() in exts:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     # Some sites return tiny/blank favicons (e.g. a 1×1 pixel). If a *downloaded*
     # favicon is suspiciously small, we treat it as invalid and try a different fallback.
@@ -2450,6 +2635,9 @@ def _download_source_icons(dist_dir: Path) -> dict[str, str]:
                 # Already in dist/; just reference it.
                 rel = found.relative_to(dist_dir)
                 out[source] = rel.as_posix()
+            continue
+
+        if local_only:
             continue
 
         # Fallback: download a site icon into icons/ (only when no local asset).
@@ -2995,8 +3183,9 @@ def _render_html(
         desc = _weather_brief_description(weather.weather_code)
         wcat = _weather_category_from_code(weather.weather_code)
         # Link to a human-friendly forecast webpage (not the raw API endpoint).
-        # meteoblue supports lat/lon in the week forecast URL and works globally.
-        forecast_href = f"https://www.meteoblue.com/en/weather/week?lat={loc.latitude}&lon={loc.longitude}"
+        # MeteoBlue: prefer named slug URLs from their public search API so the forecast
+        # page title matches the place (coordinate paths alone are often mislabeled).
+        forecast_href = _meteoblue_named_week_url(loc.latitude, loc.longitude, loc.name)
         display_city = (loc.name.split(",")[0].strip() if loc.name else "")
         cur_class = "tempHot" if weather.current_f >= 95 else ("tempCold" if weather.current_f <= 32 else "")
         high_class = "tempHot" if weather.high_f >= 95 else ("tempCold" if weather.high_f <= 32 else "")
@@ -3013,7 +3202,8 @@ def _render_html(
                 <div class="wright">
                   <div class="wline wtop">
                     <button class="wloc" id="wlocBtn" type="button"
-                            data-lat="{loc.latitude}" data-lon="{loc.longitude}">
+                            data-lat="{loc.latitude}" data-lon="{loc.longitude}"
+                            data-place="{html.escape(loc.name or "", quote=True)}">
                       {html.escape(display_city or loc.name)}
                     </button>
                     <span class="wdesc" id="wdesc">{html.escape(desc)}</span>
@@ -4081,6 +4271,83 @@ def _render_html(
               (function () {{
                 const STORAGE_KEY = "newsOfTheDay.weatherLocation";
 
+                // Same path pattern as Python ``_meteoblue_week_url`` (query ``?lat=`` links are unreliable).
+                function meteoblueWeekUrl(lat, lon) {{
+                  const la = Number(lat);
+                  const lo = Number(lon);
+                  if (!Number.isFinite(la) || !Number.isFinite(lo)) {{
+                    return "https://www.meteoblue.com/en/weather/week";
+                  }}
+                  const latPart = Math.abs(la).toFixed(3) + (la >= 0 ? "N" : "S");
+                  const lonPart = Math.abs(lo).toFixed(3) + (lo >= 0 ? "E" : "W");
+                  return "https://www.meteoblue.com/en/weather/week/" + latPart + lonPart + "0_UTC";
+                }}
+
+                function syncForecastLinkFromButton() {{
+                  const btn = document.getElementById("wlocBtn");
+                  const link = document.getElementById("whiloLink");
+                  if (!btn || !link) return;
+                  const lat = btn.dataset.lat;
+                  const lon = btn.dataset.lon;
+                  if (lat !== undefined && lat !== "" && lon !== undefined && lon !== "") {{
+                    // Fallback when the browser cannot run the named search (e.g. offline).
+                    link.href = meteoblueWeekUrl(lat, lon);
+                  }}
+                }}
+
+                // MeteoBlue exposes the same JSON their search box uses; we match by lat/lon.
+                async function resolveMeteoblueNamedWeekUrl(lat, lon, placeQuery) {{
+                  const fallback = meteoblueWeekUrl(lat, lon);
+                  const q = String(placeQuery || "").trim();
+                  if (!q) return fallback;
+                  try {{
+                    const res = await fetch(
+                      "https://www.meteoblue.com/en/server/search/query3?query=" + encodeURIComponent(q)
+                    );
+                    if (!res.ok) return fallback;
+                    const data = await res.json();
+                    const results = (data && data.results) || [];
+                    const la = Number(lat);
+                    const lo = Number(lon);
+                    if (!Number.isFinite(la) || !Number.isFinite(lo)) return fallback;
+                    let best = null;
+                    let bestD = Infinity;
+                    for (let i = 0; i < results.length; i++) {{
+                      const r = results[i];
+                      if (typeof r.lat !== "number" || typeof r.lon !== "number" || !r.url) continue;
+                      const dlat = r.lat - la;
+                      const dlon = r.lon - lo;
+                      const d = dlat * dlat + dlon * dlon;
+                      if (d < bestD) {{ bestD = d; best = r; }}
+                    }}
+                    if (!best) return fallback;
+                    if (bestD > 0.25 * 0.25) return fallback;
+                    return "https://www.meteoblue.com/en/weather/week/" + best.url;
+                  }} catch (_) {{
+                    return fallback;
+                  }}
+                }}
+
+                async function onForecastLinkClick(e) {{
+                  e.preventDefault();
+                  const btn = document.getElementById("wlocBtn");
+                  const lat = btn && btn.dataset.lat;
+                  const lon = btn && btn.dataset.lon;
+                  const place = (btn && btn.dataset.place) || "";
+                  const url = await resolveMeteoblueNamedWeekUrl(lat, lon, place);
+                  window.open(url, "_blank", "noopener,noreferrer");
+                }}
+
+                function scheduleNamedForecastHref() {{
+                  const btn = document.getElementById("wlocBtn");
+                  const link = document.getElementById("whiloLink");
+                  if (!btn || !link) return;
+                  const lat = btn.dataset.lat;
+                  const lon = btn.dataset.lon;
+                  const place = btn.dataset.place || "";
+                  resolveMeteoblueNamedWeekUrl(lat, lon, place).then((u) => {{ link.href = u; }});
+                }}
+
                 function setText(id, text) {{
                   const el = document.getElementById(id);
                   if (el) el.textContent = text;
@@ -4193,6 +4460,7 @@ def _render_html(
                     btn.textContent = city;
                     btn.dataset.lat = String(loc.latitude);
                     btn.dataset.lon = String(loc.longitude);
+                    btn.dataset.place = String(loc.name || "");
                   }}
 
                   const weatherBox = document.querySelector(".weather");
@@ -4209,11 +4477,7 @@ def _render_html(
                     weatherBox.dataset.wcat = wcat;
                   }}
 
-                  const whiloLink = document.getElementById("whiloLink");
-                  if (whiloLink) {{
-                    whiloLink.href = "https://www.meteoblue.com/en/weather/week"
-                      + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
-                  }}
+                  syncForecastLinkFromButton();
 
                   function setTempClass(id, valueF) {{
                     const el = document.getElementById(id);
@@ -4237,28 +4501,33 @@ def _render_html(
                 async function refreshFromStoredLocation() {{
                   const raw = localStorage.getItem(STORAGE_KEY);
                   if (!raw) return;
+                  let loc;
                   try {{
-                    const loc = JSON.parse(raw);
+                    loc = JSON.parse(raw);
+                  }} catch (_) {{
+                    return;
+                  }}
+                  try {{
                     // Even if weather fetch fails (e.g. file:// pages block fetch),
-                    // still update the *forecast link* and displayed city to match the
-                    // stored location so clicking H/L doesn't go to the wrong place.
+                    // still update city + forecast link from storage so H/L matches the saved place.
                     const btn = document.getElementById("wlocBtn");
                     if (btn) {{
                       const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
                       btn.textContent = city;
                       btn.dataset.lat = String(loc.latitude);
                       btn.dataset.lon = String(loc.longitude);
+                      btn.dataset.place = String(loc.name || "");
                     }}
-                    const whiloLink = document.getElementById("whiloLink");
-                    if (whiloLink) {{
-                      whiloLink.href = "https://www.meteoblue.com/en/weather/week"
-                        + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
-                    }}
+                    syncForecastLinkFromButton();
+                    scheduleNamedForecastHref();
+                  }} catch (_) {{}}
 
+                  try {{
                     const data = await fetchWeather(loc.latitude, loc.longitude);
                     applyWeather(loc, data);
+                    scheduleNamedForecastHref();
                   }} catch (_) {{
-                    // Ignore storage errors; the page will still display server-fetched values.
+                    // Keep server-rendered numbers if the browser cannot reach Open-Meteo.
                   }}
                 }}
 
@@ -4276,15 +4545,13 @@ def _render_html(
                       btn.textContent = city;
                       btn.dataset.lat = String(loc.latitude);
                       btn.dataset.lon = String(loc.longitude);
+                      btn.dataset.place = String(loc.name || "");
                     }}
-                    const whiloLink = document.getElementById("whiloLink");
-                    if (whiloLink) {{
-                      whiloLink.href = "https://www.meteoblue.com/en/weather/week"
-                        + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
-                    }}
+                    syncForecastLinkFromButton();
 
                     const data = await fetchWeather(loc.latitude, loc.longitude);
                     applyWeather(loc, data);
+                    scheduleNamedForecastHref();
                   }} catch (e) {{
                     alert("Sorry — I couldn't find that location or fetch weather for it.");
                   }}
@@ -4292,6 +4559,8 @@ def _render_html(
 
                 const btn = document.getElementById("wlocBtn");
                 if (btn) btn.addEventListener("click", onChangeLocation);
+                const whiloLink = document.getElementById("whiloLink");
+                if (whiloLink) whiloLink.addEventListener("click", onForecastLinkClick);
                 refreshFromStoredLocation();
               }})();
             </script>
@@ -4318,6 +4587,32 @@ def main() -> int:
 
     # Copy git-tracked static assets (favicons, touch icon, etc.) into dist/.
     _copy_site_static_assets(project_dir, dist_dir)
+
+    use_cache = "--use-cache" in sys.argv
+    if use_cache:
+        cached = _load_build_cache(project_dir)
+        if cached:
+            headlines_cached, weather_cached = cached
+            hydrated_fast = _reconcile_cached_image_paths(dist_dir, list(headlines_cached))
+            weather_fast = weather_cached
+            if weather_fast is None:
+                loc_fb = _default_location()
+                weather_fast = _fetch_weather(loc_fb.latitude, loc_fb.longitude)
+            source_icon_paths_fast = _download_source_icons(dist_dir, local_only=True)
+            html_text = _render_html(
+                hydrated_fast,
+                built_at=datetime.now(),
+                weather=weather_fast,
+                source_icon_paths=source_icon_paths_fast,
+            )
+            out_html = dist_dir / "index.html"
+            out_html.write_text(html_text, encoding="utf-8")
+            print("[INFO] Rebuilt HTML from cache (--use-cache); feeds and image downloads were skipped.")
+            print(f"Wrote {out_html}")
+            expected = 6 * len(_feed_specs())
+            print(f"Cards: {len(hydrated_fast)} (aim is {expected})")
+            return 0
+        print("[WARN] No usable build cache found; run a full build once, then retry. Doing a full build now.")
 
     headlines = _collect_headlines()
     loc = _default_location()
@@ -4393,6 +4688,7 @@ def main() -> int:
     # temporarily blocked or return too few items, the actual count can be lower.
     expected = 6 * len(_feed_specs())
     print(f"Cards: {len(hydrated)} (aim is {expected})")
+    _save_build_cache(project_dir, hydrated, weather)
     return 0
 
 
