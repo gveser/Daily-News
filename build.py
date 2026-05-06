@@ -2140,22 +2140,7 @@ def _weather_icon_svg(weather_code: Optional[int]) -> str:
     human-friendly categories (sun/cloud/rain/snow/storm/fog).
     """
 
-    # Default: partly cloudy
-    category = "cloud"
-    if weather_code is None:
-        category = "cloud"
-    elif weather_code == 0:
-        category = "sun"
-    elif weather_code in (1, 2, 3):
-        category = "cloud"
-    elif weather_code in (45, 48):
-        category = "fog"
-    elif weather_code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
-        category = "rain"
-    elif weather_code in (71, 73, 75, 77, 85, 86):
-        category = "snow"
-    elif weather_code in (95, 96, 99):
-        category = "storm"
+    category = _weather_category_from_code(weather_code)
 
     # Simple, crisp line icons (stroke only). Sized to 22x22.
     # Note: we inline SVG to avoid extra assets and keep the output static.
@@ -2202,6 +2187,55 @@ def _weather_icon_svg(weather_code: Optional[int]) -> str:
         f'<path d="M7 14a5 5 0 0 1 9.7-1.6A4 4 0 1 1 17 20H8a4 4 0 0 1-1-6" {common}/>'
         f"</svg>"
     )
+
+def _weather_category_from_code(weather_code: Optional[int]) -> str:
+    """
+    Map an Open-Meteo weather code to a small set of UI categories.
+
+    We use this for:
+    - icon selection
+    - icon color theming
+    """
+
+    if weather_code is None:
+        return "cloud"
+    if weather_code == 0:
+        return "sun"
+    if weather_code in (1, 2, 3):
+        return "cloud"
+    if weather_code in (45, 48):
+        return "fog"
+    if weather_code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+        return "rain"
+    if weather_code in (71, 73, 75, 77, 85, 86):
+        return "snow"
+    if weather_code in (95, 96, 99):
+        return "storm"
+    return "cloud"
+
+
+def _weather_brief_description(weather_code: Optional[int]) -> str:
+    """
+    Return a short human-friendly weather description for a given Open-Meteo code.
+
+    We keep this intentionally brief because it appears in the header UI.
+    """
+
+    if weather_code is None:
+        return "Partly cloudy"
+    if weather_code == 0:
+        return "Clear"
+    if weather_code in (1, 2, 3):
+        return "Partly cloudy"
+    if weather_code in (45, 48):
+        return "Fog"
+    if weather_code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+        return "Rain"
+    if weather_code in (71, 73, 75, 77, 85, 86):
+        return "Snow"
+    if weather_code in (95, 96, 99):
+        return "Thunderstorms"
+    return "Partly cloudy"
 
 
 def _download_image(url: str, out_path: Path, referer: Optional[str] = None, timeout_s: int = 25) -> bool:
@@ -2958,27 +2992,45 @@ def _render_html(
     weather_html = ""
     if weather is not None:
         rain = f"{weather.rain_probability_pct}%" if weather.rain_probability_pct is not None else "—"
+        desc = _weather_brief_description(weather.weather_code)
+        wcat = _weather_category_from_code(weather.weather_code)
         # Link to a human-friendly forecast webpage (not the raw API endpoint).
         # meteoblue supports lat/lon in the week forecast URL and works globally.
         forecast_href = f"https://www.meteoblue.com/en/weather/week?lat={loc.latitude}&lon={loc.longitude}"
+        display_city = (loc.name.split(",")[0].strip() if loc.name else "")
+        cur_class = "tempHot" if weather.current_f >= 95 else ("tempCold" if weather.current_f <= 32 else "")
+        high_class = "tempHot" if weather.high_f >= 95 else ("tempCold" if weather.high_f <= 32 else "")
+        low_class = "tempHot" if weather.low_f >= 95 else ("tempCold" if weather.low_f <= 32 else "")
         weather_html = textwrap.dedent(
             f"""
-            <div class="weather" title="Weather (Open-Meteo)">
-              {_weather_icon_svg(weather.weather_code)}
-              <div class="wline">
-                <button class="wloc" id="wlocBtn" type="button"
-                        data-lat="{loc.latitude}" data-lon="{loc.longitude}">
-                  {html.escape(loc.name)}
-                </button>
-                <span class="wsep">:</span>
-                <span class="wtemp" id="wtemp">{weather.current_f:.0f}°F</span>
-                <span class="wsep">•</span>
-                <a class="whilo" id="whiloLink" href="{html.escape(forecast_href)}" target="_blank" rel="noopener noreferrer"
-                   title="Open forecast (Open-Meteo API)">
-                  <span id="whilo">H {weather.high_f:.0f}° / L {weather.low_f:.0f}°</span>
-                </a>
-                <span class="wsep">•</span>
-                <span class="wrain" id="wrain">Rain {html.escape(rain)}</span>
+            <div class="weather" title="Weather (Open-Meteo)" data-wcat="{html.escape(wcat)}">
+              <div class="wrow">
+                <div class="wleft">
+                  {_weather_icon_svg(weather.weather_code)}
+                  <span class="wtemp {cur_class}" id="wtemp">{weather.current_f:.0f}°F</span>
+                </div>
+
+                <div class="wright">
+                  <div class="wline wtop">
+                    <button class="wloc" id="wlocBtn" type="button"
+                            data-lat="{loc.latitude}" data-lon="{loc.longitude}">
+                      {html.escape(display_city or loc.name)}
+                    </button>
+                    <span class="wdesc" id="wdesc">{html.escape(desc)}</span>
+                  </div>
+
+                  <div class="wline wbottom">
+                    <a class="whilo" id="whiloLink" href="{html.escape(forecast_href)}" target="_blank" rel="noopener noreferrer"
+                       title="Open forecast">
+                      <span id="whilo">
+                        H <span class="{high_class}" id="whigh">{weather.high_f:.0f}°</span>
+                        / L <span class="{low_class}" id="wlow">{weather.low_f:.0f}°</span>
+                      </span>
+                    </a>
+                    <span class="wsep">•</span>
+                    <span class="wrain" id="wrain">Rain {html.escape(rain)}</span>
+                  </div>
+                </div>
               </div>
             </div>
             """
@@ -3155,7 +3207,7 @@ def _render_html(
               .weather {{
                 display: flex;
                 gap: 10px;
-                align-items: center;
+                align-items: flex-start;
                 padding: 8px 10px;
                 border-radius: 12px;
                 border: 1px solid var(--border);
@@ -3163,10 +3215,29 @@ def _render_html(
               }}
 
               .wicon {{
-                width: 22px;
-                height: 22px;
+                width: 30px;
+                height: 30px;
                 color: rgba(255,255,255,0.92);
                 flex: 0 0 auto;
+              }}
+
+              .wrow {{
+                display: flex;
+                gap: 10px;
+                align-items: center;
+              }}
+
+              .wleft {{
+                display: grid;
+                justify-items: center;
+                gap: 2px;
+                flex: 0 0 auto;
+              }}
+
+              .wright {{
+                display: grid;
+                gap: 4px;
+                min-width: 0;
               }}
 
               .wline {{
@@ -3174,6 +3245,15 @@ def _render_html(
                 align-items: baseline;
                 gap: 8px;
                 white-space: nowrap;
+              }}
+
+              .wtop {{
+                align-items: center;
+              }}
+
+              .wbottom {{
+                color: rgba(255,255,255,0.82);
+                font-size: 13px;
               }}
 
               .wloc {{
@@ -3188,6 +3268,8 @@ def _render_html(
                 text-decoration: underline;
                 text-decoration-color: rgba(255,255,255,0.35);
                 text-underline-offset: 3px;
+                font-size: 12px;
+                font-weight: 650;
               }}
 
               .wloc:hover {{
@@ -3197,11 +3279,30 @@ def _render_html(
               .wtemp {{
                 font-weight: 700;
                 letter-spacing: 0.2px;
+                font-size: 12px;
               }}
+
+              .wdesc {{
+                color: rgba(255,255,255,0.86);
+                font-size: 14px;
+                font-weight: 600;
+                max-width: 220px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+              }}
+
+              /* Weather icon theming by "predominant" category */
+              .weather[data-wcat="sun"] .wicon {{ color: rgba(253, 224, 71, 0.95); }}   /* pale yellow */
+              .weather[data-wcat="rain"] .wicon {{ color: rgba(147, 197, 253, 0.95); }} /* light blue */
+              .weather[data-wcat="snow"] .wicon {{ color: rgba(249, 168, 212, 0.95); }} /* pale pink */
+
+              /* Temperature threshold highlighting */
+              .tempHot {{ color: rgba(252, 165, 165, 0.95) !important; }}   /* light red */
+              .tempCold {{ color: rgba(249, 168, 212, 0.95) !important; }} /* light pink */
 
               .whilo {{
                 color: rgba(255,255,255,0.82);
-                font-size: 12px;
+                font-size: 13px;
                 text-decoration: underline;
                 text-decoration-color: rgba(255,255,255,0.28);
                 text-underline-offset: 3px;
@@ -3213,7 +3314,7 @@ def _render_html(
 
               .wrain {{
                 color: rgba(255,255,255,0.82);
-                font-size: 12px;
+                font-size: 13px;
               }}
 
               .wsep {{
@@ -4043,6 +4144,17 @@ def _render_html(
                   </svg>`;
                 }}
 
+                function descForCode(code) {{
+                  if (code === null || code === undefined) return "Partly cloudy";
+                  if (code === 0) return "Clear";
+                  if (code === 1 || code === 2 || code === 3) return "Partly cloudy";
+                  if (code === 45 || code === 48) return "Fog";
+                  if ([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(code)) return "Rain";
+                  if ([71,73,75,77,85,86].includes(code)) return "Snow";
+                  if ([95,96,99].includes(code)) return "Thunderstorms";
+                  return "Partly cloudy";
+                }}
+
                 async function geocode(name) {{
                   const url = "https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" + encodeURIComponent(name);
                   const res = await fetch(url);
@@ -4077,9 +4189,24 @@ def _render_html(
 
                   const btn = document.getElementById("wlocBtn");
                   if (btn) {{
-                    btn.textContent = loc.name;
+                    const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
+                    btn.textContent = city;
                     btn.dataset.lat = String(loc.latitude);
                     btn.dataset.lon = String(loc.longitude);
+                  }}
+
+                  const weatherBox = document.querySelector(".weather");
+                  if (weatherBox) {{
+                    // Mirror Python category mapping for icon theming.
+                    let wcat = "cloud";
+                    if (code === null || code === undefined) wcat = "cloud";
+                    else if (code === 0) wcat = "sun";
+                    else if (code === 1 || code === 2 || code === 3) wcat = "cloud";
+                    else if (code === 45 || code === 48) wcat = "fog";
+                    else if ([51,53,55,56,57,61,63,65,66,67,80,81,82].includes(code)) wcat = "rain";
+                    else if ([71,73,75,77,85,86].includes(code)) wcat = "snow";
+                    else if ([95,96,99].includes(code)) wcat = "storm";
+                    weatherBox.dataset.wcat = wcat;
                   }}
 
                   const whiloLink = document.getElementById("whiloLink");
@@ -4088,8 +4215,21 @@ def _render_html(
                       + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
                   }}
 
+                  function setTempClass(id, valueF) {{
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.classList.remove("tempHot", "tempCold");
+                    if (valueF >= 95) el.classList.add("tempHot");
+                    else if (valueF <= 32) el.classList.add("tempCold");
+                  }}
+
                   setText("wtemp", `${{curF}}°F`);
-                  setText("whilo", `H ${{high}}° / L ${{low}}°`);
+                  setTempClass("wtemp", curF);
+                  setText("wdesc", descForCode(code));
+                  setText("whigh", `${{high}}°`);
+                  setText("wlow", `${{low}}°`);
+                  setTempClass("whigh", high);
+                  setTempClass("wlow", low);
                   setText("wrain", `Rain ${{rain !== undefined && rain !== null ? (rain + "%") : "—"}}`);
                   setIconSvg(iconForCode(code));
                 }}
@@ -4099,6 +4239,22 @@ def _render_html(
                   if (!raw) return;
                   try {{
                     const loc = JSON.parse(raw);
+                    // Even if weather fetch fails (e.g. file:// pages block fetch),
+                    // still update the *forecast link* and displayed city to match the
+                    // stored location so clicking H/L doesn't go to the wrong place.
+                    const btn = document.getElementById("wlocBtn");
+                    if (btn) {{
+                      const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
+                      btn.textContent = city;
+                      btn.dataset.lat = String(loc.latitude);
+                      btn.dataset.lon = String(loc.longitude);
+                    }}
+                    const whiloLink = document.getElementById("whiloLink");
+                    if (whiloLink) {{
+                      whiloLink.href = "https://www.meteoblue.com/en/weather/week"
+                        + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
+                    }}
+
                     const data = await fetchWeather(loc.latitude, loc.longitude);
                     applyWeather(loc, data);
                   }} catch (_) {{
@@ -4113,6 +4269,20 @@ def _render_html(
                   try {{
                     const loc = await geocode(input);
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
+                    // Update city + forecast link immediately (even if weather fetch fails).
+                    const btn = document.getElementById("wlocBtn");
+                    if (btn) {{
+                      const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
+                      btn.textContent = city;
+                      btn.dataset.lat = String(loc.latitude);
+                      btn.dataset.lon = String(loc.longitude);
+                    }}
+                    const whiloLink = document.getElementById("whiloLink");
+                    if (whiloLink) {{
+                      whiloLink.href = "https://www.meteoblue.com/en/weather/week"
+                        + `?lat=${{loc.latitude}}&lon=${{loc.longitude}}`;
+                    }}
+
                     const data = await fetchWeather(loc.latitude, loc.longitude);
                     applyWeather(loc, data);
                   }} catch (e) {{
