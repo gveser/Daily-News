@@ -1,49 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
-  <defs>
-    <!-- Ocean gradient -->
-    <radialGradient id="ocean" cx="30%" cy="25%" r="75%">
-      <stop offset="0" stop-color="#38BDF8"/>
-      <stop offset="0.55" stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#1E3A8A"/>
-    </radialGradient>
+  <!--
+    Favicon: Full-bleed globe + NEWS text (inspired by your latest image)
 
-    <!-- Subtle highlight -->
-    <radialGradient id="gloss" cx="28%" cy="22%" r="55%">
-      <stop offset="0" stop-color="rgba(255,255,255,0.55)"/>
+    Constraints from you:
+    - maximize size (full-bleed / no outer padding)
+    - no rims, no borders (no strokes around the globe or label)
+  -->
+
+  <defs>
+    <radialGradient id="ocean" cx="32%" cy="24%" r="82%">
+      <stop offset="0" stop-color="#6AF0FF"/>
+      <stop offset="0.55" stop-color="#1C86FF"/>
+      <stop offset="1" stop-color="#06306F"/>
+    </radialGradient>
+    <radialGradient id="gloss" cx="30%" cy="20%" r="60%">
+      <stop offset="0" stop-color="rgba(255,255,255,0.40)"/>
       <stop offset="1" stop-color="rgba(255,255,255,0)"/>
     </radialGradient>
-
-    <!-- Drop shadow for the G so it reads at small sizes -->
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.55)"/>
+    <filter id="textGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.4" flood-color="rgba(0,0,0,0.35)"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="2.2" flood-color="rgba(255,255,255,0.22)"/>
     </filter>
   </defs>
 
-  <!-- Globe (edge-to-edge; transparent background) -->
-  <circle cx="32" cy="32" r="31.5" fill="url(#ocean)"/>
+  <!-- Full-bleed globe (r=32 touches edges). No rim stroke. -->
+  <circle cx="32" cy="32" r="32" fill="url(#ocean)"/>
 
-  <!-- Latitude/longitude lines -->
-  <g stroke="rgba(255,255,255,0.35)" stroke-width="1" fill="none">
-    <ellipse cx="32" cy="32" rx="24.5" ry="31.5"/>
-    <ellipse cx="32" cy="32" rx="12.25" ry="31.5"/>
-    <path d="M1.5 32h61"/>
-    <path d="M4.5 21.5h55"/>
-    <path d="M4.5 42.5h55"/>
+  <!-- Continents (stylized, bold shapes for tiny sizes) -->
+  <g fill="#B8F08A" opacity="0.95">
+    <!-- Americas -->
+    <path d="M17 18c4-6 12-8 18-6 4 1 6 4 6 7 0 4-4 7-9 8-5 1-8-1-10-3-2-2-7-2-8-4-1-1 1-2 3-2z"/>
+    <path d="M14 36c1-4 6-6 10-5 4 1 6 5 4 9-2 5-7 8-12 7-4-1-5-6-2-11z"/>
+    <!-- Europe/Africa -->
+    <path d="M38 19c3-2 7-2 10 0 3 2 3 5 1 7-2 2-6 3-8 3-3 0-5-2-6-4-1-2 0-4 3-6z"/>
+    <path d="M41 31c4-2 9-1 12 2 3 3 3 8-1 12-4 4-9 5-13 2-4-3-4-11 2-16z"/>
   </g>
 
-  <!-- Simple land blobs (stylized, not geographically exact) -->
-  <g fill="#22C55E" opacity="0.95">
-    <path d="M22 18c4-6 14-7 20-3 3 2 2 7-1 10-3 3-9 4-12 3-3-1-6 0-7-3-2-3-2-5 0-7z"/>
-    <path d="M14 38c2-3 6-4 9-3 3 1 3 4 2 7-1 3-6 6-9 5-3-1-5-5-2-9z"/>
-    <path d="M40 40c3-3 8-3 11 0 3 3 3 7 0 10-3 3-8 3-11 0-3-3-3-7 0-10z"/>
-  </g>
+  <!-- Subtle highlight to keep it "icon-like" without a rim -->
+  <circle cx="32" cy="32" r="32" fill="url(#gloss)"/>
 
-  <!-- Gloss highlight -->
-  <circle cx="32" cy="32" r="31.5" fill="url(#gloss)"/>
-
-  <!-- Big G in front -->
-  <text x="32" y="46" text-anchor="middle"
+  <!-- NEWS text (no border/rim). Use glow for legibility. -->
+  <text x="32" y="42" text-anchor="middle"
         font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial"
-        font-size="40" font-weight="900"
-        fill="#FFFFFF" filter="url(#shadow)">G</text>
+        font-size="22" font-weight="900" letter-spacing="1.2"
+        fill="#FFFFFF" filter="url(#textGlow)">NEWS</text>
 </svg>
