@@ -795,6 +795,13 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://feeds.bbci.co.uk/news/world/rss.xml"],
             use_homepage_scrape=False,
         ),
+        # Int'l: Al Jazeera (moved up to 2nd position in Int'l tab)
+        FeedSpec(
+            source="Al Jazeera",
+            homepage_url="https://www.aljazeera.com/",
+            urls=["https://www.aljazeera.com/xml/rss/all.xml"],
+            use_homepage_scrape=False,
+        ),
         FeedSpec(
             source="The Diplomat",
             homepage_url="https://thediplomat.com/",
@@ -807,6 +814,13 @@ def _feed_specs() -> list[FeedSpec]:
             urls=["https://www.straitstimes.com/news/world/rss.xml"],
             use_homepage_scrape=True,
             homepage_link_allow_regex=r"https://www\.straitstimes\.com/(singapore|world|asia|business|opinion|sport|life|multimedia|tech|environment|money|invest)/.+",
+        ),
+        # Int'l: Times of India (immediately after Straits Times in the Int'l tab)
+        FeedSpec(
+            source="Times of India",
+            homepage_url="https://timesofindia.indiatimes.com/",
+            urls=["https://timesofindia.indiatimes.com/rssfeedstopstories.cms"],
+            use_homepage_scrape=False,
         ),
 
         # Added sources
@@ -831,15 +845,14 @@ def _feed_specs() -> list[FeedSpec]:
         ),
         # UK: Reuters
         #
-        # Note: Reuters' historical `feeds.reuters.com` endpoints are not always reliable
-        # for scripted fetches. A Google News RSS search constrained to reuters.com is
-        # very stable and still yields normal article links.
+        # Note (May 2026): `www.reuters.com` now returns HTTP 401 to many automated clients,
+        # which makes og:image extraction and even homepage scraping impossible here.
+        # The "Reuters Best" RSS feed (WordPress) is accessible and still provides Reuters
+        # stories with usable preview images, so we use it instead of reuters.com.
         FeedSpec(
             source="Reuters",
-            homepage_url="https://www.reuters.com/",
-            urls=[
-                "https://news.google.com/rss/search?q=site%3Areuters.com+when%3A7d&hl=en-GB&gl=GB&ceid=GB%3Aen"
-            ],
+            homepage_url="https://reutersbest.com/",
+            urls=["https://reutersbest.com/feed/"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -864,26 +877,6 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="France 24",
-            homepage_url="https://www.france24.com/en/",
-            urls=["https://www.france24.com/en/rss"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="Le Monde",
-            homepage_url="https://www.lemonde.fr/",
-            urls=["https://www.lemonde.fr/rss/une.xml"],
-            use_homepage_scrape=False,
-        ),
-        # El País below the two French sources
-        FeedSpec(
-            source="El País",
-            homepage_url="https://elpais.com/",
-            # English edition:
-            urls=["https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="South China Morning Post",
             homepage_url="https://www.scmp.com/",
             urls=["https://www.scmp.com/rss"],
@@ -891,29 +884,9 @@ def _feed_specs() -> list[FeedSpec]:
             homepage_link_allow_regex=r"https://www\.scmp\.com/.+",
         ),
         FeedSpec(
-            source="AllAfrica",
-            homepage_url="https://allafrica.com/",
-            urls=["http://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"],
-            use_homepage_scrape=False,
-        ),
-        # Keep Al Jazeera as second-to-last in Int'l group (just above Jerusalem Post).
-        FeedSpec(
-            source="Al Jazeera",
-            homepage_url="https://www.aljazeera.com/",
-            urls=["https://www.aljazeera.com/xml/rss/all.xml"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="The Jerusalem Post",
             homepage_url="https://www.jpost.com/",
             urls=["https://www.jpost.com/rss/rssfeedsfrontpage.aspx"],
-            use_homepage_scrape=False,
-        ),
-        # Int'l: Times of India
-        FeedSpec(
-            source="Times of India",
-            homepage_url="https://timesofindia.indiatimes.com/",
-            urls=["https://timesofindia.indiatimes.com/rssfeedstopstories.cms"],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -950,29 +923,55 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
 
-        FeedSpec(
-            source="NZZ",
-            homepage_url="https://www.nzz.ch/",
-            urls=["https://www.nzz.ch/startseite.rss"],
-            use_homepage_scrape=False,
-        ),
+        # --- Region ordering tweaks (user requested) ---
+        # EU tab order: EUobserver -> El País -> France 24 -> Le Monde -> AFP -> NZZ
+
+        # EU tab requested order: EUobserver -> El País -> France 24 -> Le Monde -> AFP -> NZZ
         FeedSpec(
             source="EUobserver",
             homepage_url="https://euobserver.com/",
             urls=["https://euobserver.com/rss"],
             use_homepage_scrape=False,
         ),
-        # EU: Agence France-Presse (AFP)
-        #
-        # AFP's public website RSS endpoints are often category-specific; for a broad
-        # "wire service" row we use Google News RSS constrained to afp.com (similar to
-        # other sources where direct RSS is unreliable).
+        FeedSpec(
+            source="El País",
+            homepage_url="https://elpais.com/",
+            # English edition:
+            urls=["https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="France 24",
+            homepage_url="https://www.france24.com/en/",
+            urls=["https://www.france24.com/en/rss"],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="Le Monde",
+            homepage_url="https://www.lemonde.fr/",
+            urls=["https://www.lemonde.fr/rss/une.xml"],
+            use_homepage_scrape=False,
+        ),
         FeedSpec(
             source="Agence France-Presse",
             homepage_url="https://www.afp.com/",
             urls=[
                 "https://news.google.com/rss/search?q=site%3Aafp.com+when%3A7d&hl=en&gl=FR&ceid=FR%3Aen",
             ],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="NZZ",
+            homepage_url="https://www.nzz.ch/",
+            urls=["https://www.nzz.ch/startseite.rss"],
+            use_homepage_scrape=False,
+        ),
+
+        # Int'l: AllAfrica (moved to bottom of Int'l list)
+        FeedSpec(
+            source="AllAfrica",
+            homepage_url="https://allafrica.com/",
+            urls=["http://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"],
             use_homepage_scrape=False,
         ),
 
@@ -1565,6 +1564,8 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "EUobserver",
         "AllAfrica",
         "South China Morning Post",
+        # Reuters feed items often lack media tags; og:image on article pages is reliable.
+        "Reuters",
     }
 
     # Cap number of enrichment fetches per source per run.
@@ -1582,6 +1583,7 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         "EUobserver": 6,
         "AllAfrica": 6,
         "South China Morning Post": 6,
+        "Reuters": 6,
     }
     used: dict[str, int] = {}
 
@@ -2604,12 +2606,15 @@ def _render_html(
 
     rows_html = "\n".join(row_parts)
 
-    # "Top News" view: the two most widely reported topics across all sources.
+    # "Top News" view: the five most widely reported topics across all sources.
     # These panels render as their own sections and are shown when the user
     # clicks the "Top News" pill.
-    top_topics = _compute_top_topics(cards, k=2)
+    top_topics = _compute_top_topics(cards, k=5)
     top_parts: list[str] = []
+    topic_nav_links: list[str] = []
     for topic_idx, topic in enumerate(top_topics):
+        topic_id = f"topTopic{topic_idx + 1}"
+        topic_nav_links.append(f'<a class="topicNavLink" href="#{esc(topic_id)}">{esc(topic.title)}</a>')
         items_html: list[str] = []
         for it in topic.items:
             has_img = bool(it.image_path) and (it.source not in _TEXT_ONLY_SOURCES)
@@ -2634,11 +2639,11 @@ def _render_html(
 
         # Join outside the f-string: f-string `{...}` parts cannot contain `\n` literals.
         items_block = "\n".join(items_html)
-        panel_class = "topicPanel topicPanelAlt" if topic_idx == 1 else "topicPanel"
+        panel_class = "topicPanel topicPanelAlt" if (topic_idx % 2 == 1) else "topicPanel"
         top_parts.append(
             textwrap.dedent(
                 f"""
-                <section class="{panel_class}" data-region="Top">
+                <section class="{panel_class}" id="{esc(topic_id)}" data-region="Top">
                   <div class="topicHeader">{esc(topic.title)}</div>
                   <div class="topicItems">
                     {items_block}
@@ -2648,7 +2653,16 @@ def _render_html(
             ).strip()
         )
 
-    top_news_html = "\n".join(top_parts)
+    topic_nav_html = ""
+    if topic_nav_links:
+        topic_nav_html = (
+            '<section class="topicNav" data-region="Top">'
+            + '<div class="topicNavInner">'
+            + " ".join(topic_nav_links)
+            + "</div></section>"
+        )
+
+    top_news_html = topic_nav_html + "\n" + "\n".join(top_parts)
     built_str = built_at.strftime("%Y-%m-%d %H:%M")
     # Example: "Sunday, April 26 2026"
     date_str = f"{built_at.strftime('%A')}, {built_at.strftime('%B')} {built_at.day} {built_at.year}"
@@ -2928,6 +2942,47 @@ def _render_html(
               }}
 
               /* Top News (topic clusters) */
+              .topicNav {{
+                border-radius: 18px;
+                border: 1px solid var(--border);
+                background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.04));
+                box-shadow: var(--shadow);
+                padding: 12px 14px;
+              }}
+
+              .topicNavInner {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: center;
+              }}
+
+              .topicNavLink {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 8px 10px;
+                border-radius: 999px;
+                border: 1px solid rgba(255,255,255,0.14);
+                background: rgba(255,255,255,0.06);
+                color: rgba(255,255,255,0.90);
+                text-decoration: none;
+                font-size: 12px;
+                font-weight: 650;
+                letter-spacing: 0.2px;
+                max-width: 100%;
+              }}
+
+              .topicNavLink:hover {{
+                background: rgba(255,255,255,0.10);
+                border-color: rgba(255,255,255,0.22);
+              }}
+
+              .topicNavLink:focus-visible {{
+                outline: 2px solid rgba(255,255,255,0.35);
+                outline-offset: 2px;
+              }}
+
               .topicPanel {{
                 border-radius: 18px;
                 border: 1px solid var(--border);
