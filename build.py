@@ -2182,8 +2182,13 @@ def _meteoblue_named_week_url(latitude: float, longitude: float, place_query: st
         for item in results:
             if item.get("lat") is None or item.get("lon") is None or not item.get("url"):
                 continue
-            dlat = float(item["lat"]) - latf
-            dlon = float(item["lon"]) - lonf
+            try:
+                ilat = float(item["lat"])
+                ilon = float(item["lon"])
+            except (TypeError, ValueError):
+                continue
+            dlat = ilat - latf
+            dlon = ilon - lonf
             d = dlat * dlat + dlon * dlon
             if d < best_d:
                 best_d = d
@@ -3211,7 +3216,9 @@ def _render_html(
 
                   <div class="wline wbottom">
                     <a class="whilo" id="whiloLink" href="{html.escape(forecast_href)}" target="_blank" rel="noopener noreferrer"
-                       title="Open forecast">
+                       title="Open forecast"
+                       data-lat="{loc.latitude}" data-lon="{loc.longitude}"
+                       data-place="{html.escape(loc.name or "", quote=True)}">
                       <span id="whilo">
                         H <span class="{high_class}" id="whigh">{weather.high_f:.0f}°</span>
                         / L <span class="{low_class}" id="wlow">{weather.low_f:.0f}°</span>
@@ -4271,16 +4278,39 @@ def _render_html(
               (function () {{
                 const STORAGE_KEY = "newsOfTheDay.weatherLocation";
 
-                // Same path pattern as Python ``_meteoblue_week_url`` (query ``?lat=`` links are unreliable).
-                function meteoblueWeekUrl(lat, lon) {{
-                  const la = Number(lat);
-                  const lo = Number(lon);
-                  if (!Number.isFinite(la) || !Number.isFinite(lo)) {{
-                    return "https://www.meteoblue.com/en/weather/week";
-                  }}
+                // Match Python ``_default_location()`` if coordinates are ever missing (must stay in sync).
+                const METEOBLUE_FALLBACK_LAT = 40.4406;
+                const METEOBLUE_FALLBACK_LON = -79.9959;
+
+                // ``Number("")`` is 0 in JS — never use raw ``Number`` for HTML dataset values.
+                function parseCoord(v) {{
+                  if (v === undefined || v === null) return NaN;
+                  const s = String(v).trim();
+                  if (s === "") return NaN;
+                  const x = parseFloat(s);
+                  return Number.isFinite(x) ? x : NaN;
+                }}
+
+                // Path-style week URL only — never use bare ``/weather/week`` (MeteoBlue defaults that to Heidelberg / IP locale).
+                function meteoblueCoordWeekUrl(lat, lon) {{
+                  let la = parseCoord(lat);
+                  let lo = parseCoord(lon);
+                  if (!Number.isFinite(la)) la = METEOBLUE_FALLBACK_LAT;
+                  if (!Number.isFinite(lo)) lo = METEOBLUE_FALLBACK_LON;
                   const latPart = Math.abs(la).toFixed(3) + (la >= 0 ? "N" : "S");
                   const lonPart = Math.abs(lo).toFixed(3) + (lo >= 0 ? "E" : "W");
                   return "https://www.meteoblue.com/en/weather/week/" + latPart + lonPart + "0_UTC";
+                }}
+
+                function syncForecastCoordsToLink(link, lat, lon, place) {{
+                  if (!link) return;
+                  if (lat !== undefined && lat !== null && String(lat).trim() !== "") {{
+                    link.dataset.lat = String(lat);
+                  }}
+                  if (lon !== undefined && lon !== null && String(lon).trim() !== "") {{
+                    link.dataset.lon = String(lon);
+                  }}
+                  if (place !== undefined) link.dataset.place = String(place || "");
                 }}
 
                 function syncForecastLinkFromButton() {{
@@ -4290,14 +4320,14 @@ def _render_html(
                   const lat = btn.dataset.lat;
                   const lon = btn.dataset.lon;
                   if (lat !== undefined && lat !== "" && lon !== undefined && lon !== "") {{
-                    // Fallback when the browser cannot run the named search (e.g. offline).
-                    link.href = meteoblueWeekUrl(lat, lon);
+                    syncForecastCoordsToLink(link, lat, lon, btn.dataset.place || "");
+                    link.href = meteoblueCoordWeekUrl(lat, lon);
                   }}
                 }}
 
                 // MeteoBlue exposes the same JSON their search box uses; we match by lat/lon.
                 async function resolveMeteoblueNamedWeekUrl(lat, lon, placeQuery) {{
-                  const fallback = meteoblueWeekUrl(lat, lon);
+                  const fallback = meteoblueCoordWeekUrl(lat, lon);
                   const q = String(placeQuery || "").trim();
                   if (!q) return fallback;
                   try {{
@@ -4307,16 +4337,19 @@ def _render_html(
                     if (!res.ok) return fallback;
                     const data = await res.json();
                     const results = (data && data.results) || [];
-                    const la = Number(lat);
-                    const lo = Number(lon);
+                    const la = parseCoord(lat);
+                    const lo = parseCoord(lon);
                     if (!Number.isFinite(la) || !Number.isFinite(lo)) return fallback;
                     let best = null;
                     let bestD = Infinity;
                     for (let i = 0; i < results.length; i++) {{
                       const r = results[i];
-                      if (typeof r.lat !== "number" || typeof r.lon !== "number" || !r.url) continue;
-                      const dlat = r.lat - la;
-                      const dlon = r.lon - lo;
+                      if (!r || !r.url) continue;
+                      const rlat = parseCoord(r.lat);
+                      const rlon = parseCoord(r.lon);
+                      if (!Number.isFinite(rlat) || !Number.isFinite(rlon)) continue;
+                      const dlat = rlat - la;
+                      const dlon = rlon - lo;
                       const d = dlat * dlat + dlon * dlon;
                       if (d < bestD) {{ bestD = d; best = r; }}
                     }}
@@ -4330,10 +4363,16 @@ def _render_html(
 
                 async function onForecastLinkClick(e) {{
                   e.preventDefault();
+                  const linkEl = e.currentTarget;
                   const btn = document.getElementById("wlocBtn");
-                  const lat = btn && btn.dataset.lat;
-                  const lon = btn && btn.dataset.lon;
-                  const place = (btn && btn.dataset.place) || "";
+                  let lat = parseCoord(linkEl.dataset.lat);
+                  let lon = parseCoord(linkEl.dataset.lon);
+                  let place = linkEl.dataset.place || "";
+                  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {{
+                    lat = parseCoord(btn && btn.dataset.lat);
+                    lon = parseCoord(btn && btn.dataset.lon);
+                    place = (btn && btn.dataset.place) || place;
+                  }}
                   const url = await resolveMeteoblueNamedWeekUrl(lat, lon, place);
                   window.open(url, "_blank", "noopener,noreferrer");
                 }}
@@ -4345,6 +4384,7 @@ def _render_html(
                   const lat = btn.dataset.lat;
                   const lon = btn.dataset.lon;
                   const place = btn.dataset.place || "";
+                  syncForecastCoordsToLink(link, lat, lon, place);
                   resolveMeteoblueNamedWeekUrl(lat, lon, place).then((u) => {{ link.href = u; }});
                 }}
 
@@ -4455,12 +4495,18 @@ def _render_html(
                   const rain = (daily.precipitation_probability_max || [])[0];
 
                   const btn = document.getElementById("wlocBtn");
+                  const link = document.getElementById("whiloLink");
                   if (btn) {{
                     const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
                     btn.textContent = city;
                     btn.dataset.lat = String(loc.latitude);
                     btn.dataset.lon = String(loc.longitude);
                     btn.dataset.place = String(loc.name || "");
+                  }}
+                  if (link) {{
+                    link.dataset.lat = String(loc.latitude);
+                    link.dataset.lon = String(loc.longitude);
+                    link.dataset.place = String(loc.name || "");
                   }}
 
                   const weatherBox = document.querySelector(".weather");
@@ -4511,12 +4557,18 @@ def _render_html(
                     // Even if weather fetch fails (e.g. file:// pages block fetch),
                     // still update city + forecast link from storage so H/L matches the saved place.
                     const btn = document.getElementById("wlocBtn");
+                    const link = document.getElementById("whiloLink");
                     if (btn) {{
                       const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
                       btn.textContent = city;
                       btn.dataset.lat = String(loc.latitude);
                       btn.dataset.lon = String(loc.longitude);
                       btn.dataset.place = String(loc.name || "");
+                    }}
+                    if (link) {{
+                      link.dataset.lat = String(loc.latitude);
+                      link.dataset.lon = String(loc.longitude);
+                      link.dataset.place = String(loc.name || "");
                     }}
                     syncForecastLinkFromButton();
                     scheduleNamedForecastHref();
@@ -4540,12 +4592,18 @@ def _render_html(
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
                     // Update city + forecast link immediately (even if weather fetch fails).
                     const btn = document.getElementById("wlocBtn");
+                    const link = document.getElementById("whiloLink");
                     if (btn) {{
                       const city = String(loc.name || "").split(",")[0].trim() || String(loc.name || "");
                       btn.textContent = city;
                       btn.dataset.lat = String(loc.latitude);
                       btn.dataset.lon = String(loc.longitude);
                       btn.dataset.place = String(loc.name || "");
+                    }}
+                    if (link) {{
+                      link.dataset.lat = String(loc.latitude);
+                      link.dataset.lon = String(loc.longitude);
+                      link.dataset.place = String(loc.name || "");
                     }}
                     syncForecastLinkFromButton();
 
