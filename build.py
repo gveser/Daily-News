@@ -1164,9 +1164,10 @@ def _feed_specs() -> list[FeedSpec]:
 
         # Added sources
         #
-        # US tab ordering request (May 2026):
-        # - Axios first
-        # - bottom three (in this order): Fox News, WSJ, Atlantic
+        # US tab (`data-region="US"`) — US-only row order in DOM / `_feed_specs()` order:
+        # 1) Axios is the first US source (first US row).
+        # 2) The last three US rows are exactly: Fox News, then The Wall Street Journal,
+        #    then The Atlantic (Atlantic is last among US sources; no US rows follow).
         FeedSpec(
             source="Axios",
             homepage_url="https://www.axios.com/",
@@ -1249,16 +1250,6 @@ def _feed_specs() -> list[FeedSpec]:
             homepage_link_allow_regex=r"https://www\.washingtonpost\.com/.+/[0-9]{4}/[0-9]{2}/[0-9]{2}/",
         ),
         FeedSpec(
-            source="The Wall Street Journal",
-            homepage_url="https://www.wsj.com/",
-            urls=[
-                # Public RSS endpoints via Dow Jones. Some links may be paywalled.
-                "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
-                "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
-            ],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="USA Today",
             homepage_url="https://www.usatoday.com/",
             # USA Today's historical rssfeeds.usatoday.com endpoints often redirect to HTML now.
@@ -1274,6 +1265,16 @@ def _feed_specs() -> list[FeedSpec]:
             urls=[
                 "https://moxie.foxnews.com/google-publisher/latest.xml",
                 "https://feeds.foxnews.com/foxnews/latest",
+            ],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="The Wall Street Journal",
+            homepage_url="https://www.wsj.com/",
+            urls=[
+                # Public RSS endpoints via Dow Jones. Some links may be paywalled.
+                "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
+                "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
             ],
             use_homepage_scrape=False,
         ),
