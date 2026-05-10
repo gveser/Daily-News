@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Union
 from urllib.parse import quote, urlparse
 
 import feedparser
@@ -615,7 +615,7 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
             # - Or a decent centroid similarity with at least 1 key token
             # - Or 3+ centroid overlaps (fallback)
             if (hits >= 2) or (_jaccard(toks, cluster["centroid"]) >= 0.22 and hits >= 1) or (cent >= 3):
-                picked[src] = best
+                picked[csrc] = best
 
         # Return in canonical order.
         return [picked[csrc] for csrc in canon_order if csrc in picked]
@@ -1571,17 +1571,39 @@ def _fetch_feed(url: str, timeout_s: int = 20) -> feedparser.FeedParserDict:
     raise last_exc
 
 
-def _fetch_html(url: str, timeout_s: int = 25) -> str:
+def _fetch_html(
+    url: str,
+    timeout_s: Union[int, float, tuple[Union[int, float], Union[int, float]]] = 25,
+    *,
+    attempts: int = 1,
+    retry_backoff_s: float = 0.55,
+) -> str:
     """
     Fetch a HTML page and return it as text.
 
     We keep headers similar to a normal browser to avoid simple bot blocks.
+
+    ``timeout_s`` may be a single seconds value or a ``(connect, read)`` tuple
+    passed through to ``requests`` so slow TLS/connect does not force long reads.
+
+    When ``attempts`` > 1, transient failures (timeouts, connection errors) retry
+    with linear backoff — callers that need a snappy CI budget should use a
+    small read timeout and 2 attempts instead of one long read.
     """
 
     headers = _browser_like_headers()
-    r = requests.get(url, headers=headers, timeout=timeout_s)
-    r.raise_for_status()
-    return r.text
+    last_exc: Optional[Exception] = None
+    for attempt in range(max(1, attempts)):
+        try:
+            r = requests.get(url, headers=headers, timeout=timeout_s)
+            r.raise_for_status()
+            return r.text
+        except Exception as e:
+            last_exc = e
+            if attempt + 1 < attempts:
+                time.sleep(retry_backoff_s * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 def _normalize_url(base: str, maybe_relative: str) -> str:
@@ -1609,7 +1631,17 @@ def _dedupe_by_link(items: Iterable[Headline]) -> list[Headline]:
     return out
 
 
-def _collect_top_headlines_from_homepage(spec: FeedSpec, n: int) -> list[Headline]:
+def _collect_top_headlines_from_homepage(
+    spec: FeedSpec,
+    n: int,
+    *,
+    homepage_timeout: Union[int, float, tuple[Union[int, float], Union[int, float]]] = 25,
+    homepage_fetch_attempts: int = 1,
+    homepage_retry_backoff_s: float = 0.55,
+    article_meta_timeout_s: int = 20,
+    max_scrape_candidates: Optional[int] = None,
+    max_wall_seconds: Optional[float] = None,
+) -> list[Headline]:
     """
     Collect "top" headlines by scraping the publisher homepage.
 
@@ -1622,6 +1654,10 @@ def _collect_top_headlines_from_homepage(spec: FeedSpec, n: int) -> list[Headlin
     - Enrich image via og:image from the article page (best-effort)
 
     This is intentionally heuristic and resilient rather than perfect.
+
+    Optional keyword parameters let slow sources (e.g. WaPo in CI) use shorter
+    read timeouts, a couple of homepage retries, and a smaller candidate buffer
+    so one stalled publisher cannot hold the whole build for many minutes.
     """
 
     if not spec.homepage_link_allow_regex:
@@ -1629,7 +1665,12 @@ def _collect_top_headlines_from_homepage(spec: FeedSpec, n: int) -> list[Headlin
 
     allow = re.compile(spec.homepage_link_allow_regex)
 
-    html_text = _fetch_html(spec.homepage_url, timeout_s=25)
+    html_text = _fetch_html(
+        spec.homepage_url,
+        timeout_s=homepage_timeout,
+        attempts=homepage_fetch_attempts,
+        retry_backoff_s=homepage_retry_backoff_s,
+    )
     soup = BeautifulSoup(html_text, "html.parser")
 
     # Step 1: collect a buffer of candidate article links in DOM order.
@@ -1641,7 +1682,7 @@ def _collect_top_headlines_from_homepage(spec: FeedSpec, n: int) -> list[Headlin
     # If this buffer is too small, the selector can run out of non-Trump items
     # and end up returning fewer than 6 headlines (which "messes up" the layout).
     max_links_to_scan = 4000
-    max_candidates = max(250, n * 40)
+    max_candidates = max_scrape_candidates if max_scrape_candidates is not None else max(250, n * 40)
     scanned = 0
     for a in soup.find_all("a", href=True):
         scanned += 1
@@ -1684,8 +1725,14 @@ def _collect_top_headlines_from_homepage(spec: FeedSpec, n: int) -> list[Headlin
     cache = _MetaCache(path=Path(__file__).resolve().parent / "cache" / "article-meta.json")
     cache.load()
 
+    # Optional hard stop so one slow publisher cannot run unbounded parallel meta
+    # fetches (each may block up to article_meta_timeout_s).
+    deadline = time.monotonic() + max_wall_seconds if max_wall_seconds is not None else None
+
     def enrich_one(it: Headline) -> Headline:
-        img, desc = _fetch_article_meta(session, cache, it.link, timeout_s=20)
+        if deadline is not None and time.monotonic() > deadline:
+            return it
+        img, desc = _fetch_article_meta(session, cache, it.link, timeout_s=article_meta_timeout_s)
         return Headline(**{**it.__dict__, "image_url": img, "summary": desc})
 
     enriched_list: list[Headline] = []
@@ -2018,8 +2065,10 @@ def _enrich_missing_media(headlines: list[Headline]) -> list[Headline]:
         if h.source in {"NEXTpittsburgh"}:
             time.sleep(0.35)
 
-        # A few sources are notably slower.
-        timeout = 35 if h.source in {"The Washington Post"} else 20
+        # A few sources are notably slower; WaPo was previously given very long
+        # timeouts which stacked badly in CI — keep reads bounded; retries happen
+        # inside _fetch_article_meta for 429s.
+        timeout = 18 if h.source in {"The Washington Post"} else 20
         img, desc = _fetch_article_meta(session, cache, h.link, timeout_s=timeout)
 
         # If the current image is a Google placeholder, prefer the publisher image we just fetched.
@@ -3070,6 +3119,64 @@ def _collect_headlines() -> list[Headline]:
     session = _new_http_session()
 
     for spec in feeds:
+        # The Washington Post: the world RSS feed usually returns enough stories
+        # with titles, links, and often media. Homepage scraping walks thousands
+        # of anchors then enriches *many* article pages in parallel — that path
+        # dominated CI wall time (repeated ~25s read timeouts). Prefer RSS when
+        # it fills the row; only scrape if the feed is short or unreachable.
+        if spec.source == "The Washington Post" and spec.use_homepage_scrape:
+            rss_selected: list[Headline] = []
+            parsed_wp: Optional[feedparser.FeedParserDict] = None
+            last_wp_err: Optional[Exception] = None
+            for url in spec.urls:
+                try:
+                    parsed_wp = _fetch_feed(url)
+                    last_wp_err = None
+                    break
+                except Exception as e:
+                    last_wp_err = e
+            if parsed_wp is None:
+                print(f"[WARN] Could not fetch feed for {spec.source}. Last error: {last_wp_err}")
+            else:
+                rss_items_wp: list[Headline] = []
+                for entry in parsed_wp.entries or []:
+                    title = (entry.get("title") or "").strip()
+                    link = (entry.get("link") or "").strip()
+                    if not title or not link:
+                        continue
+                    rss_items_wp.append(
+                        Headline(
+                            source=spec.source,
+                            title=title,
+                            link=link,
+                            summary=_extract_entry_summary(entry),
+                            image_url=_extract_image_url(entry),
+                        )
+                    )
+                rss_items_wp = _dedupe_by_link(rss_items_wp)
+                rss_selected = _select_with_trump_cap(rss_items_wp, per_source_target, trump_cap=3)
+                if len(rss_selected) >= per_source_target:
+                    all_items.extend(rss_selected)
+                    continue
+            try:
+                scraped_wp = _collect_top_headlines_from_homepage(
+                    spec,
+                    per_source_target,
+                    homepage_timeout=(8, 14),
+                    homepage_fetch_attempts=2,
+                    article_meta_timeout_s=12,
+                    max_scrape_candidates=max(36, per_source_target * 6),
+                    max_wall_seconds=52,
+                )
+                if scraped_wp:
+                    all_items.extend(scraped_wp)
+                    continue
+            except Exception as e:
+                print(f"[WARN] Homepage scrape failed for {spec.source}: {e}")
+            if rss_selected:
+                all_items.extend(rss_selected)
+            continue
+
         # For most sources, RSS is "latest in a section", which is often *not*
         # the same as the site's top-of-homepage story mix. If enabled, scrape
         # the homepage to better approximate "top headlines".
