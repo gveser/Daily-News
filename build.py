@@ -486,6 +486,16 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
         pool.append(h)
 
     # Greedy clustering in original order (which is already grouped by source).
+    #
+    # Important nuance (user request):
+    # Some sources are effectively the same outlet under different labels (e.g. BBC News
+    # vs BBC World Service). For Top News we treat those as *one* source so a story that
+    # appears on both does not get double credit for "number of outlets covering it".
+    def canonical_topic_source(source: str) -> str:
+        if source in ("BBC News", "BBC World Service"):
+            return "BBC"
+        return source
+
     clusters: list[dict] = []
     for h in pool:
         toks = set(_tokenize_for_topic(h.title))
@@ -504,9 +514,11 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
         if best_idx is not None and best_sim >= 0.35 and len(toks & clusters[best_idx]["centroid"]) >= 2:
             clusters[best_idx]["items"].append(h)
             clusters[best_idx]["centroid"] |= toks
-            clusters[best_idx]["sources"].add(h.source)
+            clusters[best_idx]["sources"].add(canonical_topic_source(h.source))
         else:
-            clusters.append({"items": [h], "centroid": set(toks), "sources": {h.source}})
+            clusters.append(
+                {"items": [h], "centroid": set(toks), "sources": {canonical_topic_source(h.source)}}
+            )
 
     # Score clusters by number of distinct sources (then by item count).
     clusters.sort(key=lambda c: (len(c["sources"]), len(c["items"])), reverse=True)
@@ -521,7 +533,9 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
                 counts[t] = counts.get(t, 0) + 1
         common = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:3]
         if common:
-            return " • ".join(w.upper() if len(w) <= 4 else w.title() for w, _ in common)
+            # Only force ALL CAPS for short tokens that are likely acronyms.
+            # (User preference: cap <=3, not <=4.)
+            return " • ".join(w.upper() if len(w) <= 3 else w.title() for w, _ in common)
         # Fallback: shorten the first title.
         first = cluster_items[0].title.strip()
         return (first[:57] + "…") if len(first) > 58 else first
@@ -559,10 +573,11 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
         key_tokens = [w for w, _ in sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:6]]
         key_set = set(key_tokens)
 
-        # Group pool by source so we can scan each source's headlines.
-        pool_by_source: dict[str, list[Headline]] = {}
+        # Group pool by *canonical* source so we can scan each outlet's headlines.
+        # This merges BBC News + BBC World Service into one "BBC" pool.
+        pool_by_canon: dict[str, list[Headline]] = {}
         for h in pool:
-            pool_by_source.setdefault(h.source, []).append(h)
+            pool_by_canon.setdefault(canonical_topic_source(h.source), []).append(h)
 
         def score(it: Headline) -> int:
             toks = set(_tokenize_for_topic(it.title))
@@ -572,16 +587,22 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
             return hits * 3 + overlap
 
         picked: dict[str, Headline] = {}
-        # Start with items already in the cluster.
+        # Start with items already in the cluster (but de-dupe by canonical outlet).
         for it in cluster["items"]:
-            picked.setdefault(it.source, it)
+            picked.setdefault(canonical_topic_source(it.source), it)
 
-        # Expand: pick best item per missing source if it matches meaningfully.
+        # Expand: pick best item per missing outlet if it matches meaningfully.
+        # Iterate in canonical order derived from _feed_specs().
+        canon_order: list[str] = []
         for spec in _feed_specs():
-            src = spec.source
-            if src in picked:
+            csrc = canonical_topic_source(spec.source)
+            if csrc not in canon_order:
+                canon_order.append(csrc)
+
+        for csrc in canon_order:
+            if csrc in picked:
                 continue
-            candidates = pool_by_source.get(src) or []
+            candidates = pool_by_canon.get(csrc) or []
             if not candidates:
                 continue
             best = max(candidates, key=score)
@@ -596,8 +617,8 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
             if (hits >= 2) or (_jaccard(toks, cluster["centroid"]) >= 0.22 and hits >= 1) or (cent >= 3):
                 picked[src] = best
 
-        # Return in the canonical source order.
-        return [picked[s.source] for s in _feed_specs() if s.source in picked]
+        # Return in canonical order.
+        return [picked[csrc] for csrc in canon_order if csrc in picked]
 
     def signature_for_items(cluster_items: list[Headline]) -> frozenset[str]:
         counts: dict[str, int] = {}
@@ -617,7 +638,7 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
             break
 
         ordered = expand_cluster_across_sources(c)
-        if len({h.source for h in ordered}) < 3:
+        if len({canonical_topic_source(h.source) for h in ordered}) < 3:
             # Not widely reported enough; skip.
             continue
 
@@ -652,7 +673,7 @@ def _compute_top_topics(items: list["Headline"], k: int = 2) -> list[TopTopic]:
     # their strongest topic (most sources), and order topics within each component
     # by source count.
     if len(chosen) >= 2:
-        source_counts = [len({h.source for h in t.items}) for t in chosen]
+        source_counts = [len({canonical_topic_source(h.source) for h in t.items}) for t in chosen]
 
         parent = list(range(len(chosen)))
 
@@ -1142,6 +1163,17 @@ def _feed_specs() -> list[FeedSpec]:
         ),
 
         # Added sources
+        #
+        # US tab ordering request (May 2026):
+        # - Axios first
+        # - bottom three (in this order): Fox News, WSJ, Atlantic
+        FeedSpec(
+            source="Axios",
+            homepage_url="https://www.axios.com/",
+            # Axios serves this feed from api.axios.com (via redirect), which is fine.
+            urls=["https://www.axios.com/feeds/feed.rss"],
+            use_homepage_scrape=False,
+        ),
         FeedSpec(
             source="Associated Press",
             homepage_url="https://apnews.com/",
@@ -1188,30 +1220,6 @@ def _feed_specs() -> list[FeedSpec]:
             use_homepage_scrape=False,
         ),
         FeedSpec(
-            source="Axios",
-            homepage_url="https://www.axios.com/",
-            # Axios serves this feed from api.axios.com (via redirect), which is fine.
-            urls=["https://www.axios.com/feeds/feed.rss"],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
-            source="The Atlantic",
-            homepage_url="https://www.theatlantic.com/",
-            # The Atlantic's reliable RSS endpoint.
-            urls=["https://www.theatlantic.com/feed/all/"],
-            use_homepage_scrape=False,
-        ),
-        # US: Fox News (official Google Publisher + legacy feeds path as fallback)
-        FeedSpec(
-            source="Fox News",
-            homepage_url="https://www.foxnews.com/",
-            urls=[
-                "https://moxie.foxnews.com/google-publisher/latest.xml",
-                "https://feeds.foxnews.com/foxnews/latest",
-            ],
-            use_homepage_scrape=False,
-        ),
-        FeedSpec(
             source="South China Morning Post",
             homepage_url="https://www.scmp.com/",
             urls=["https://www.scmp.com/rss"],
@@ -1250,7 +1258,6 @@ def _feed_specs() -> list[FeedSpec]:
             ],
             use_homepage_scrape=False,
         ),
-        # US: USA Today should be last
         FeedSpec(
             source="USA Today",
             homepage_url="https://www.usatoday.com/",
@@ -1258,6 +1265,23 @@ def _feed_specs() -> list[FeedSpec]:
             # To keep this source reliable without brittle scraping, we use a Google News RSS
             # query constrained to usatoday.com.
             urls=["https://news.google.com/rss/search?q=site%3Ausatoday.com&hl=en-US&gl=US&ceid=US%3Aen"],
+            use_homepage_scrape=False,
+        ),
+        # US: Fox News (official Google Publisher + legacy feeds path as fallback)
+        FeedSpec(
+            source="Fox News",
+            homepage_url="https://www.foxnews.com/",
+            urls=[
+                "https://moxie.foxnews.com/google-publisher/latest.xml",
+                "https://feeds.foxnews.com/foxnews/latest",
+            ],
+            use_homepage_scrape=False,
+        ),
+        FeedSpec(
+            source="The Atlantic",
+            homepage_url="https://www.theatlantic.com/",
+            # The Atlantic's reliable RSS endpoint.
+            urls=["https://www.theatlantic.com/feed/all/"],
             use_homepage_scrape=False,
         ),
 
