@@ -109,6 +109,7 @@ _REGION_BY_SOURCE: dict[str, str] = {
     "Politico": "US",
     "Axios": "US",
     "The Atlantic": "US",
+    "Fox News": "US",
     # Pittsburgh (PGH)
     "WESA": "PGH",
     "NEXTpittsburgh": "PGH",
@@ -154,9 +155,10 @@ def _tokenize_for_topic(text: str) -> list[str]:
     # Stopwords:
     # We filter common "filler" words so they don't dominate Top News keywords.
     # This list includes:
-    # - English fillers (the, is, with, ...)
+    # - English fillers (the, is, with, common verbs like get/say, media words like video, ...)
     # - Common German article/preposition fillers (der, die, das, auf, ...)
     # - Common French article/preposition fillers (le, la, les, de, des, ...)
+    # - Common Spanish function words (los, las, que, para, ...) for multilingual headlines
     #
     # This is intentionally a small, pragmatic list (not a full NLP stopword corpus).
     stop = {
@@ -221,6 +223,137 @@ def _tokenize_for_topic(text: str) -> list[str]:
         "updates",
         "how",
         "still",
+        # More English fillers (headlines / function words that rarely identify a topic)
+        "all",
+        "not",
+        "no",
+        "nor",
+        "so",
+        "if",
+        "than",
+        "then",
+        "too",
+        "also",
+        "only",
+        "even",
+        "very",
+        "any",
+        "own",
+        "same",
+        "few",
+        "off",
+        "per",
+        "via",
+        "now",
+        "new",
+        "day",
+        "way",
+        "week",
+        "year",
+        "time",
+        "times",
+        "many",
+        "much",
+        "each",
+        "both",
+        "such",
+        "most",
+        "more",
+        "some",
+        "out",
+        "up",
+        "down",
+        "amid",
+        "among",
+        "against",
+        "despite",
+        "following",
+        "within",
+        "without",
+        "through",
+        "during",
+        "until",
+        "since",
+        "once",
+        "again",
+        "back",
+        "away",
+        "well",
+        "really",
+        "yet",
+        "already",
+        "ever",
+        "while",
+        "across",
+        "around",
+        "along",
+        "today",
+        "tonight",
+        "what",
+        "when",
+        "why",
+        "who",
+        "whom",
+        "whose",
+        "which",
+        "get",
+        "got",
+        "gets",
+        "go",
+        "goes",
+        "going",
+        "went",
+        "gone",
+        "come",
+        "came",
+        "comes",
+        "make",
+        "made",
+        "makes",
+        "take",
+        "took",
+        "takes",
+        "see",
+        "saw",
+        "know",
+        "knew",
+        "think",
+        "thinks",
+        "thought",
+        "tell",
+        "told",
+        "tells",
+        "give",
+        "gave",
+        "find",
+        "found",
+        "look",
+        "looks",
+        "show",
+        "shows",
+        "seem",
+        "seems",
+        "want",
+        "wants",
+        "need",
+        "needs",
+        "like",
+        "video",
+        "watch",
+        "photo",
+        "photos",
+        "image",
+        "images",
+        "read",
+        "full",
+        "story",
+        "stories",
+        "latest",
+        "top",
+        "breaking",
+        "report",
+        "reports",
+        "according",
 
         # German
         "der",
@@ -284,6 +417,32 @@ def _tokenize_for_topic(text: str) -> list[str]:
         "au",
         "est",
         "sont",
+
+        # Spanish (e.g. El País / Latin American headlines tokenized a–z)
+        "los",
+        "las",
+        "por",
+        "para",
+        "como",
+        "que",
+        "del",
+        "al",
+        "ya",
+        "muy",
+        "mas",
+        "pero",
+        "todo",
+        "todos",
+        "esta",
+        "este",
+        "estos",
+        "estas",
+        "hay",
+        "son",
+        "ser",
+        "fue",
+        "han",
+        "haber",
     }
 
     raw = re.findall(r"[a-z0-9]+", (text or "").lower())
@@ -1040,6 +1199,16 @@ def _feed_specs() -> list[FeedSpec]:
             homepage_url="https://www.theatlantic.com/",
             # The Atlantic's reliable RSS endpoint.
             urls=["https://www.theatlantic.com/feed/all/"],
+            use_homepage_scrape=False,
+        ),
+        # US: Fox News (official Google Publisher + legacy feeds path as fallback)
+        FeedSpec(
+            source="Fox News",
+            homepage_url="https://www.foxnews.com/",
+            urls=[
+                "https://moxie.foxnews.com/google-publisher/latest.xml",
+                "https://feeds.foxnews.com/foxnews/latest",
+            ],
             use_homepage_scrape=False,
         ),
         FeedSpec(
@@ -2533,6 +2702,7 @@ def _download_source_icons(dist_dir: Path, *, local_only: bool = False) -> dict[
         "USA Today": ["usa-today", "usatoday"],
         "Vox": ["vox"],
         "Axios": ["axios"],
+        "Fox News": ["fox-news", "foxnews", "fox"],
         "WESA": ["wesa", "90-5-wesa"],
         "NEXTpittsburgh": ["nextpittsburgh", "next-pittsburgh"],
         "Pgh City Paper": ["pghcitypaper", "pgh-city-paper", "pittsburgh-city-paper", "city-paper"],
@@ -2584,6 +2754,7 @@ def _download_source_icons(dist_dir: Path, *, local_only: bool = False) -> dict[
         "Vox": "https://www.vox.com/static-assets/icons/favicon.ico",
         "Axios": "https://www.axios.com/favicon.ico",
         "The Atlantic": "https://www.theatlantic.com/favicon.ico",
+        "Fox News": "https://www.google.com/s2/favicons?domain=foxnews.com&sz=128",
     }
 
     # Sources where we prefer the downloaded/pinned icon over any repo-local
@@ -3329,6 +3500,14 @@ def _render_html(
                 gap: 6px;
                 flex-wrap: nowrap;
                 overflow-x: hidden;
+                /* Gold frame on both region strips (header + footer) so they stand apart from news rows. */
+                padding: 7px 9px;
+                border-radius: 12px;
+                border: 1px solid rgba(201, 162, 39, 0.5);
+                background: rgba(201, 162, 39, 0.04);
+                box-shadow:
+                  0 0 0 1px rgba(255, 224, 130, 0.12) inset,
+                  0 1px 10px rgba(201, 162, 39, 0.08);
               }}
 
               .regionBtn {{
@@ -3353,10 +3532,19 @@ def _render_html(
                 background: rgba(255,255,255,0.09);
               }}
 
+              /* Active region: strong golden frame so it stands out from other chips and from the bar chrome. */
               .regionBtn[aria-pressed="true"] {{
-                border-color: rgba(255,255,255,0.28);
-                background: rgba(255,255,255,0.12);
-                color: rgba(255,255,255,0.92);
+                border-color: #c9a227;
+                background: linear-gradient(
+                  180deg,
+                  rgba(212, 175, 55, 0.22),
+                  rgba(201, 162, 39, 0.12)
+                );
+                color: rgba(255, 250, 235, 0.96);
+                box-shadow:
+                  0 0 0 2px rgba(212, 175, 55, 0.55),
+                  0 0 16px rgba(255, 200, 60, 0.18),
+                  inset 0 1px 0 rgba(255, 248, 220, 0.12);
               }}
 
               /*
@@ -3822,6 +4010,7 @@ def _render_html(
               .row[data-source="Vox"]::before {{ background: linear-gradient(180deg, rgba(251, 146, 60, 0.24), rgba(255,255,255,0.06)); }}
               .row[data-source="Politico"]::before {{ background: linear-gradient(180deg, rgba(59, 130, 246, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="Axios"]::before {{ background: linear-gradient(180deg, rgba(34, 197, 94, 0.22), rgba(255,255,255,0.06)); }}
+              .row[data-source="Fox News"]::before {{ background: linear-gradient(180deg, rgba(0, 51, 102, 0.34), rgba(200, 16, 46, 0.18)); }}
               .row[data-source="WESA"]::before {{ background: linear-gradient(180deg, rgba(236, 72, 153, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="NEXTpittsburgh"]::before {{ background: linear-gradient(180deg, rgba(168, 85, 247, 0.22), rgba(255,255,255,0.06)); }}
               .row[data-source="Pgh City Paper"]::before {{ background: linear-gradient(180deg, rgba(245, 158, 11, 0.22), rgba(255,255,255,0.06)); }}
